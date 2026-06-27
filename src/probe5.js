@@ -99,6 +99,54 @@ async function main() {
   await settle(page, 5000);
   if (page.url().includes('login')) { console.error('Cookies expired'); process.exit(1); }
 
+  // ── 0a. BI: Appointments ────────────────────────────────────────────────────
+  console.log('\n── BI: Appointments ──');
+  await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 3000);
+  await dismissOverlays(page);
+  await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
+  await settle(page, 3000);
+  await selectPeriod(page, monthOption);
+  await settle(page, 1000);
+  await page.getByText('Generate', { exact: true }).first().click();
+  await settle(page, 8000);
+  await snap(page, 'bi_generated');
+  {
+    const frame = page.frames().find(f => f.url().includes('/api/v1/reports/') && f.url().includes('/html'));
+    if (frame) {
+      const t = await frame.evaluate(() => document.body.innerText || '');
+      save('bi_frame_innertext.txt', t);
+      console.log('  BI frame URL:', frame.url());
+    } else {
+      console.warn('  BI: no report frame found');
+      save('bi_frame_innertext.txt', '(no frame)');
+    }
+  }
+
+  // ── 0b. Client Retention ────────────────────────────────────────────────────
+  console.log('\n── Client Retention ──');
+  await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 3000);
+  await dismissOverlays(page);
+  await page.getByText('Client Retention', { exact: true }).first().click();
+  await settle(page, 3000);
+  await selectPeriod(page, monthOption);
+  await settle(page, 1000);
+  await page.getByText('Generate', { exact: true }).first().click();
+  await settle(page, 8000);
+  await snap(page, 'ret_generated');
+  {
+    const frame = page.frames().find(f => f.url().includes('/api/v1/reports/') && f.url().includes('/html'));
+    if (frame) {
+      const t = await frame.evaluate(() => document.body.innerText || '');
+      save('ret_frame_innertext.txt', t);
+      console.log('  Retention frame URL:', frame.url());
+    } else {
+      console.warn('  Retention: no report frame found');
+      save('ret_frame_innertext.txt', '(no frame)');
+    }
+  }
+
   // Generate Sales Summary for current month
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
