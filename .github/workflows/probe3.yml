@@ -1,0 +1,40 @@
+name: Probe3 — Dropdown Options + Cell Extraction
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Which account to probe'
+        required: false
+        default: 'both'
+        type: choice
+        options: [both, skinsage, waxon]
+
+jobs:
+  probe3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SCREENSHOT_DIR: /tmp/kpi-probe3
+      PROBE_ACCOUNT: ${{ inputs.account }}
+      SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
+      WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+      - name: Run probe3
+        run: node src/probe3.js
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe3-results
+          path: /tmp/kpi-probe3/
+          retention-days: 7
