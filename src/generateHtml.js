@@ -1,8 +1,6 @@
 /**
  * generateHtml.js
- * Executive health scorecard dashboard.
- * Two businesses side by side. Three KPIs each.
- * Color-coded by threshold. Mini bar chart shows 3-month trend.
+ * Soft, warm business health dashboard — light mode, fits on screen without scrolling.
  */
 
 const THRESHOLDS = {
@@ -19,7 +17,6 @@ function healthColor(kpi, value) {
   return 'red';
 }
 
-// Sales health: are we on pace vs projected?
 function salesHealth(sales, projected) {
   if (sales === null || projected === null) return 'neutral';
   const pct = sales / projected * 100;
@@ -45,46 +42,41 @@ function fmtDate(iso) {
   }) + ' PT';
 }
 
-// Mini SVG bar chart — 3 values, current is highlighted
-function sparkBars(values, colorClass) {
-  const max = Math.max(...values.filter(v => v !== null), 1);
+// Mini sparkline bars — 3 bars, current month highlighted
+function sparkBars(values) {
+  const valid = values.filter(v => v !== null && v > 0);
+  const max = valid.length ? Math.max(...valid) : 1;
   const bars = values.map((v, i) => {
-    const h = v !== null ? Math.max(4, Math.round((v / max) * 32)) : 4;
+    const h = (v !== null && v > 0) ? Math.max(4, Math.round((v / max) * 28)) : 3;
+    const x = i * 13;
     const isCurrent = i === 0;
     const fill = isCurrent ? 'var(--bar-active)' : 'var(--bar-past)';
-    const opacity = v === null ? '0.2' : '1';
-    return `<rect x="${i * 14}" y="${36 - h}" width="10" height="${h}" rx="2" fill="${fill}" opacity="${opacity}"/>`;
+    const opacity = (v === null || v === 0) ? '0.3' : '1';
+    return `<rect x="${x}" y="${30 - h}" width="9" height="${h}" rx="2" fill="${fill}" opacity="${opacity}"/>`;
   }).join('');
-  return `<svg width="42" height="36" viewBox="0 0 42 36" class="spark ${colorClass}">${bars}</svg>`;
+  return `<svg width="39" height="30" viewBox="0 0 39 30">${bars}</svg>`;
 }
 
-// Delta badge: current vs previous month
-function deltaBadge(current, previous) {
-  if (current === null || previous === null) return '';
+function deltaBadge(current, previous, isMoney = false) {
+  if (current === null || previous === null) return '<span class="delta neutral">—</span>';
   const diff = current - previous;
   if (Math.abs(diff) < 0.01) return '<span class="delta neutral">—</span>';
   const up = diff > 0;
-  const sign = up ? '+' : '';
   const cls = up ? 'up' : 'down';
-  const formatted = Number.isInteger(diff) ? `${sign}${Math.round(diff)}` : `${sign}${diff.toFixed(1)}`;
-  return `<span class="delta ${cls}">${up ? '▲' : '▼'} ${formatted}</span>`;
+  const arrow = up ? '↑' : '↓';
+  let display;
+  if (isMoney) {
+    display = `${arrow} ${fmt$(Math.abs(diff))} vs last month`;
+  } else {
+    display = `${arrow} ${Math.abs(diff).toFixed(1)}pp vs last month`;
+  }
+  return `<span class="delta ${cls}">${display}</span>`;
 }
 
-function salesDelta(current, previous) {
-  if (current === null || previous === null) return '';
-  const diff = current - previous;
-  const up = diff >= 0;
-  const cls = up ? 'up' : 'down';
-  const sign = up ? '+' : '';
-  return `<span class="delta ${cls}">${up ? '▲' : '▼'} ${sign}${fmt$(Math.abs(diff))}</span>`;
-}
+function kpiCard(opts) {
+  const { label, sublabel, currentDisplay, prevPeriods, spark, delta, health, projRow } = opts;
 
-function kpiBlock(opts) {
-  const { label, sublabel, currentVal, currentDisplay, prevPeriods, spark, delta, health, projRow } = opts;
-
-  const dot = health !== 'neutral'
-    ? `<span class="health-dot ${health}"></span>`
-    : `<span class="health-dot neutral"></span>`;
+  const accent = { green: '#5c8a6e', amber: '#c47c4a', red: '#c2546b', neutral: '#c4b5ae' }[health];
 
   const prevHtml = prevPeriods.map(p =>
     `<div class="prev-row">
@@ -94,16 +86,16 @@ function kpiBlock(opts) {
   ).join('');
 
   return `
-    <div class="kpi-block ${health}">
-      <div class="kpi-top">
-        <div class="kpi-name">${dot}${label}</div>
+    <div class="kpi-card ${health}">
+      <div class="kpi-card-top">
+        <div class="kpi-label">${label}</div>
         <div class="kpi-spark">${spark}</div>
       </div>
-      <div class="kpi-main">${currentDisplay}</div>
+      <div class="kpi-value">${currentDisplay}</div>
       ${sublabel ? `<div class="kpi-sub">${sublabel}</div>` : ''}
       ${projRow || ''}
-      <div class="kpi-delta">${delta}</div>
-      <div class="prev-periods">${prevHtml}</div>
+      ${delta}
+      <div class="prev-rows">${prevHtml}</div>
     </div>`;
 }
 
@@ -113,93 +105,82 @@ function businessPanel(biz) {
   if (error) {
     return `
       <div class="biz-panel error-panel">
-        <div class="biz-name">${label}</div>
-        <div class="error-msg">⚠ ${error}</div>
+        <div class="biz-header">
+          <div class="biz-name">${label}</div>
+        </div>
+        <div class="error-body">Cookies expired — refresh the secret to restore data.</div>
       </div>`;
   }
 
   const [cur, m1, m2] = periods;
 
-  // ── Sales ──────────────────────────────────────────────────────────────────
-  const salesHealth_ = salesHealth(cur?.sales, cur?.projectedSales);
-  const salesSpark = sparkBars(
-    [cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null),
-    salesHealth_
-  );
-  const salesBlock = kpiBlock({
+  // Sales
+  const sh = salesHealth(cur?.sales, cur?.projectedSales);
+  const salesCard = kpiCard({
     label: 'Monthly Sales',
-    health: salesHealth_,
+    sublabel: 'MTD adjusted total',
+    health: sh,
     currentDisplay: fmt$(cur?.sales),
-    sublabel: cur?.sales !== null ? `${fmtDate(new Date().toISOString()).split(',')[0]} MTD` : null,
-    projRow: cur?.projectedSales !== null
-      ? `<div class="proj-row"><span class="proj-label">Projected</span><span class="proj-val">${fmt$(cur?.projectedSales)}</span></div>`
+    projRow: cur?.projectedSales
+      ? `<div class="proj-row"><span>Projected EOM</span><strong>${fmt$(cur?.projectedSales)}</strong></div>`
       : '',
-    delta: salesDelta(cur?.sales, m1?.sales),
-    spark: salesSpark,
+    delta: deltaBadge(cur?.sales, m1?.sales, true),
+    spark: sparkBars([cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null)),
     prevPeriods: [
       { label: m1?.label || '', display: fmt$(m1?.sales) },
       { label: m2?.label || '', display: fmt$(m2?.sales) },
     ],
   });
 
-  // ── Utilization ────────────────────────────────────────────────────────────
-  const utilHealth = healthColor('utilization', cur?.utilization);
-  const utilSpark = sparkBars(
-    [cur?.utilization, m1?.utilization, m2?.utilization].map(v => v ?? null),
-    utilHealth
-  );
-  const utilBlock = kpiBlock({
+  // Utilization
+  const uh = healthColor('utilization', cur?.utilization);
+  const utilCard = kpiCard({
     label: 'Utilization',
     sublabel: 'booked hrs / available hrs',
-    health: utilHealth,
+    health: uh,
     currentDisplay: fmtPct(cur?.utilization),
     projRow: '',
     delta: deltaBadge(cur?.utilization, m1?.utilization),
-    spark: utilSpark,
+    spark: sparkBars([cur?.utilization, m1?.utilization, m2?.utilization].map(v => v ?? null)),
     prevPeriods: [
       { label: m1?.label || '', display: fmtPct(m1?.utilization) },
       { label: m2?.label || '', display: fmtPct(m2?.utilization) },
     ],
   });
 
-  // ── Retention ──────────────────────────────────────────────────────────────
-  const retHealth = healthColor('retention', cur?.retention);
-  const retSpark = sparkBars(
-    [cur?.retention, m1?.retention, m2?.retention].map(v => v ?? null),
-    retHealth
-  );
-  const retBlock = kpiBlock({
+  // Retention
+  const rh = healthColor('retention', cur?.retention);
+  const retCard = kpiCard({
     label: 'Client Retention',
     sublabel: 'retained within 180 days',
-    health: retHealth,
+    health: rh,
     currentDisplay: fmtPct(cur?.retention),
     projRow: '',
     delta: deltaBadge(cur?.retention, m1?.retention),
-    spark: retSpark,
+    spark: sparkBars([cur?.retention, m1?.retention, m2?.retention].map(v => v ?? null)),
     prevPeriods: [
       { label: m1?.label || '', display: fmtPct(m1?.retention) },
       { label: m2?.label || '', display: fmtPct(m2?.retention) },
     ],
   });
 
-  // Overall business health signal
-  const signals = [salesHealth_, utilHealth, retHealth].filter(h => h !== 'neutral');
-  const overallHealth = signals.includes('red') ? 'red'
+  const signals = [sh, uh, rh].filter(h => h !== 'neutral');
+  const overall = signals.includes('red') ? 'red'
     : signals.includes('amber') ? 'amber'
     : signals.length > 0 ? 'green' : 'neutral';
 
-  const healthLabel = { green: 'On Track', amber: 'Watch', red: 'Needs Attention', neutral: 'No Data' };
+  const pill = { green: 'Thriving', amber: 'Watch', red: 'Needs Love', neutral: 'No Data' };
 
   return `
     <div class="biz-panel">
       <div class="biz-header">
         <div class="biz-name">${label}</div>
-        <div class="biz-health ${overallHealth}">${healthLabel[overallHealth]}</div>
+        <div class="health-pill ${overall}">${pill[overall]}</div>
       </div>
-      <div class="kpi-grid">
-        ${salesBlock}
-        ${utilBlock}
-        ${retBlock}
+      <div class="cards">
+        ${salesCard}
+        ${utilCard}
+        ${retCard}
       </div>
     </div>`;
 }
@@ -208,7 +189,7 @@ function generateHtml({ businesses, generatedAt, errors }) {
   const panels = businesses.map(businessPanel).join('\n');
 
   const errorBanner = errors.length > 0
-    ? `<div class="error-banner">${errors.map(e => `<b>${e.account}</b>: ${e.error}`).join('<br>')}</div>`
+    ? `<div class="error-banner">${errors.map(e => `<b>${e.account}</b> data unavailable — cookies need refresh`).join(' &nbsp;·&nbsp; ')}</div>`
     : '';
 
   return `<!DOCTYPE html>
@@ -216,235 +197,255 @@ function generateHtml({ businesses, generatedAt, errors }) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KPI Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<title>Business Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg:       #0f1117;
-    --surface:  #1a1d27;
-    --surface2: #22253a;
-    --border:   #2d3148;
-    --text:     #e8eaf0;
-    --muted:    #6b7280;
-    --green:    #22c55e;
-    --green-bg: #052e16;
-    --amber:    #f59e0b;
-    --amber-bg: #1c1200;
-    --red:      #ef4444;
-    --red-bg:   #1f0707;
-    --neutral:  #6b7280;
-    --bar-active: #6366f1;
-    --bar-past:   #2d3148;
-    --serif: 'Fraunces', Georgia, serif;
-    --sans:  'Inter', system-ui, sans-serif;
-  }
-  body {
-    font-family: var(--sans);
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    padding: 40px 28px;
-    font-size: 13px;
-    line-height: 1.5;
-  }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* ── Header ─────────────────────────────────────────────────────────── */
-  header {
-    margin-bottom: 36px;
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  header h1 {
-    font-family: var(--serif);
-    font-weight: 300;
-    font-size: 28px;
-    letter-spacing: -0.02em;
-    color: var(--text);
-  }
-  .gen-time { font-size: 11px; color: var(--muted); }
+:root {
+  --bg:        #fff9f7;
+  --surface:   #ffffff;
+  --border:    #f0e8e4;
+  --text:      #3c2f2a;
+  --muted:     #b09088;
+  --faint:     #f7efec;
 
-  /* ── Error banner ────────────────────────────────────────────────────── */
-  .error-banner {
-    margin-bottom: 20px;
-    padding: 12px 16px;
-    background: var(--red-bg);
-    border: 1px solid var(--red);
-    border-radius: 6px;
-    font-size: 12px;
-    color: var(--red);
-  }
+  --green:     #5a8a6e;
+  --green-bg:  #edf5f0;
+  --amber:     #c07848;
+  --amber-bg:  #fdf3ec;
+  --rose:      #bf5068;
+  --rose-bg:   #fdf0f3;
+  --neutral:   #c4b5ae;
 
-  /* ── Layout: two business panels ────────────────────────────────────── */
-  .dashboard {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-  }
-  @media (max-width: 800px) { .dashboard { grid-template-columns: 1fr; } }
+  --bar-active: #d4919d;
+  --bar-past:   #ede5e2;
 
-  /* ── Business panel ──────────────────────────────────────────────────── */
-  .biz-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  .biz-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .biz-name {
-    font-family: var(--serif);
-    font-weight: 300;
-    font-size: 20px;
-    letter-spacing: -0.01em;
-  }
-  .biz-health {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 4px 10px;
-    border-radius: 20px;
-  }
-  .biz-health.green  { background: var(--green-bg); color: var(--green); }
-  .biz-health.amber  { background: var(--amber-bg); color: var(--amber); }
-  .biz-health.red    { background: var(--red-bg);   color: var(--red);   }
-  .biz-health.neutral { background: var(--surface2); color: var(--muted); }
+  --r: 14px;
+  --serif: 'Fraunces', Georgia, serif;
+  --sans:  'Inter', system-ui, sans-serif;
+}
 
-  .error-panel .biz-name { padding: 16px 20px; border-bottom: 1px solid var(--border); }
-  .error-msg { padding: 20px; color: var(--red); font-size: 13px; }
+html, body {
+  height: 100%;
+}
 
-  /* ── KPI grid: 3 cards ───────────────────────────────────────────────── */
-  .kpi-grid {
-    display: flex;
-    flex-direction: column;
-  }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 18px 22px 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
 
-  /* ── KPI block ───────────────────────────────────────────────────────── */
-  .kpi-block {
-    padding: 18px 20px;
-    border-bottom: 1px solid var(--border);
-    position: relative;
-  }
-  .kpi-block:last-child { border-bottom: none; }
-  .kpi-block.green  { border-left: 3px solid var(--green); }
-  .kpi-block.amber  { border-left: 3px solid var(--amber); }
-  .kpi-block.red    { border-left: 3px solid var(--red);   }
-  .kpi-block.neutral { border-left: 3px solid var(--border); }
+/* ── Header ──────────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+header h1 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 22px;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.gen-time {
+  font-size: 11px;
+  color: var(--muted);
+}
 
-  .kpi-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
-  }
-  .kpi-name {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .health-dot {
-    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-  }
-  .health-dot.green   { background: var(--green); }
-  .health-dot.amber   { background: var(--amber); }
-  .health-dot.red     { background: var(--red);   }
-  .health-dot.neutral { background: var(--muted); }
+/* ── Error banner ─────────────────────────────────────────────────────── */
+.error-banner {
+  margin-bottom: 10px;
+  padding: 8px 14px;
+  background: var(--rose-bg);
+  border: 1px solid #f0c0cc;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--rose);
+  flex-shrink: 0;
+}
 
-  .kpi-spark { flex-shrink: 0; }
+/* ── Two-column layout ────────────────────────────────────────────────── */
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+}
 
-  .kpi-main {
-    font-family: var(--serif);
-    font-size: 38px;
-    font-weight: 300;
-    letter-spacing: -0.02em;
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-  .kpi-sub {
-    font-size: 11px;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
+/* ── Business panel ───────────────────────────────────────────────────── */
+.biz-panel {
+  background: var(--surface);
+  border-radius: var(--r);
+  box-shadow: 0 1px 8px rgba(60, 30, 24, 0.07), 0 0 0 1px var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  /* Projected end-of-month row */
-  .proj-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-  }
-  .proj-label {
-    font-size: 11px;
-    color: var(--muted);
-  }
-  .proj-val {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-  }
+.biz-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.biz-name {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 18px;
+  color: var(--text);
+}
 
-  /* Delta badge */
-  .kpi-delta { margin-bottom: 12px; }
-  .delta {
-    font-size: 12px;
-    font-weight: 600;
-    padding: 2px 7px;
-    border-radius: 4px;
-  }
-  .delta.up     { background: var(--green-bg); color: var(--green); }
-  .delta.down   { background: var(--red-bg);   color: var(--red);   }
-  .delta.neutral { background: var(--surface2); color: var(--muted); }
+.health-pill {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+.health-pill.green   { background: var(--green-bg); color: var(--green); }
+.health-pill.amber   { background: var(--amber-bg); color: var(--amber); }
+.health-pill.red     { background: var(--rose-bg);  color: var(--rose);  }
+.health-pill.neutral { background: var(--faint);    color: var(--muted); }
 
-  /* Previous months */
-  .prev-periods {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-  }
-  .prev-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-  }
-  .prev-label { color: var(--muted); }
-  .prev-val   { font-weight: 500; }
+.error-panel .biz-header { border-bottom: none; }
+.error-body {
+  padding: 20px 16px;
+  color: var(--rose);
+  font-size: 12px;
+}
 
-  /* Spark bar colours */
-  .spark.green rect:first-child   { fill: var(--green) !important; }
-  .spark.amber rect:first-child   { fill: var(--amber) !important; }
-  .spark.red   rect:first-child   { fill: var(--red)   !important; }
+/* ── KPI cards ────────────────────────────────────────────────────────── */
+.cards {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
 
-  /* ── Footer ──────────────────────────────────────────────────────────── */
-  footer {
-    margin-top: 32px;
-    font-size: 11px;
-    color: var(--muted);
-    border-top: 1px solid var(--border);
-    padding-top: 14px;
-  }
+.kpi-card {
+  flex: 1;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.kpi-card:last-child { border-bottom: none; }
+
+/* Left accent line */
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+}
+.kpi-card.green::before  { background: var(--green); }
+.kpi-card.amber::before  { background: var(--amber); }
+.kpi-card.red::before    { background: var(--rose);  }
+.kpi-card.neutral::before { background: var(--border); }
+
+.kpi-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.kpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.kpi-spark { flex-shrink: 0; }
+
+.kpi-value {
+  font-family: var(--serif);
+  font-weight: 300;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+.kpi-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* Projected EOM */
+.proj-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.proj-row strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Delta */
+.delta {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+.delta.up      { background: var(--green-bg); color: var(--green); }
+.delta.down    { background: var(--rose-bg);  color: var(--rose);  }
+.delta.neutral { background: var(--faint);    color: var(--muted); }
+
+/* Prev months */
+.prev-rows {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.prev-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.prev-label { color: var(--muted); }
+.prev-val   { font-weight: 500; color: var(--text); }
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+footer {
+  margin-top: 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Business Health</h1>
-  <span class="gen-time">Generated ${fmtDate(generatedAt)}</span>
+  <h1>Business Dashboard</h1>
+  <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
 </header>
 
 ${errorBanner}
@@ -454,9 +455,9 @@ ${panels}
 </div>
 
 <footer>
-  Sales = Adjusted Total (gross minus refunds). Utilization = booked hrs ÷ available hrs (all staff).
-  Retention = clients retained within 180 days ÷ total clients from that month.
-  Green ≥ 70% util / 65% retention · Amber ≥ 50% / 45% · Red below.
+  Sales = adjusted total (gross − refunds) &nbsp;·&nbsp; Utilization = booked ÷ available hours &nbsp;·&nbsp;
+  Retention = retained within 180 days ÷ total clients &nbsp;·&nbsp;
+  Thriving ≥ 70% util / 65% ret &nbsp;·&nbsp; Watch ≥ 50% / 45%
 </footer>
 
 </body>
