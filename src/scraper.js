@@ -261,17 +261,54 @@ async function fetchSales(page, base, monthOption, snapPrefix) {
 
 /**
  * Business Intelligence: Appointments → Hours Booked % ("All Selected" row, cols[3]).
- *
- * Confirmed column layout (from probe5):
- * Staff | Avail.# | Booked# | Booked% | Total# | Requested# | Req% | Walk-ins# | Walk% | Prebookings# | Pre% | ...
- *
- * "All Selected" line example:
- * All Selected\t487.33\t253.84\t52.09\t496\t...
- *   cols[0] = "All Selected"
- *   cols[3] = 52.09 (Booked %)
+ * For the current month, we first generate the full-month report to capture the iframe
+ * URL (which contains staffIds, locationIds, etc.), then open a second page with
+ * timePeriodEndExclusive set to tomorrow — giving true MTD utilization.
  */
+async function fetchUtilizationMTD(page) {
+  const frame = page.frames().find(
+    f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
+  );
+  if (!frame) { console.warn('  [Util MTD] iframe not found'); return null; }
+
+  let settings;
+  try {
+    const urlObj = new URL(frame.url());
+    settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
+  } catch(e) {
+    console.warn('  [Util MTD] could not parse settings:', e.message);
+    return null;
+  }
+
+  // Shift end to tomorrow (timePeriodEndExclusive is exclusive, so today becomes included)
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  now.setDate(now.getDate() + 1);
+  settings.timePeriodEndExclusive =
+    `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
+  const urlObj2 = new URL(frame.url());
+  urlObj2.searchParams.set('settings', JSON.stringify(settings));
+  const mtdUrl = urlObj2.toString();
+  console.log(`  [Util MTD] end→${settings.timePeriodEndExclusive}`);
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(mtdUrl, { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const text = await p.evaluate(() => document.body?.innerText || '');
+    const allRow = text.split('\n').find(l => l.startsWith('All Selected\t'));
+    if (!allRow) { console.warn('  [Util MTD] All Selected row not found'); return null; }
+    const cols = allRow.split('\t').map(s => s.trim());
+    const util = parseFloat(cols[3]);
+    console.log(`  [Util MTD] Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
+    return isNaN(util) ? null : util;
+  } finally {
+    await p.close();
+  }
+}
+
 async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false) {
-  console.log(`\n  [Utilization] ${monthOption}${isCurrent ? ' (MTD custom range)' : ''}`);
+  console.log(`\n  [Utilization] ${monthOption}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
@@ -287,6 +324,15 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_util_generated`);
 
+  // For current month: re-fetch with today as the end date (true MTD)
+  if (isCurrent) {
+    const mtd = await fetchUtilizationMTD(page).catch(e => {
+      console.warn('  [Util MTD] error, falling back to full month:', e.message);
+      return null;
+    });
+    if (mtd !== null) return mtd;
+  }
+
   const text = await getReportFrameText(page);
   if (!text) return null;
 
@@ -298,7 +344,6 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   }
 
   const cols = parseRow(allSelectedLine);
-  // cols[0]="All Selected", cols[1]=Avail#, cols[2]=Booked#, cols[3]=Booked%
   const util = parseFloat(cols[3]);
   console.log(`  [Utilization] All Selected → Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
   return isNaN(util) ? null : util;
