@@ -297,9 +297,11 @@ async function fetchRetention(page, base, monthOption, snapPrefix) {
 
   const totalClients = existingTotal + newTotal;
   const retained     = existingRet180 + newRet180;
-  const retention = totalClients > 0 ? Math.round(retained / totalClients * 100) : null;
-  console.log(`  [Retention] = ${retained}/${totalClients} = ${retention}%`);
-  return retention;
+  const retention    = totalClients > 0 ? Math.round(retained / totalClients * 100) : null;
+  const existingPct  = existingTotal > 0 ? parseFloat((existingRet180 / existingTotal * 100).toFixed(1)) : null;
+  const newPct       = newTotal > 0      ? parseFloat((newRet180 / newTotal * 100).toFixed(1)) : null;
+  console.log(`  [Retention] = ${retained}/${totalClients} = ${retention}% (existing ${existingPct}%, new ${newPct}%)`);
+  return { combined: retention, existingPct, newPct };
 }
 
 // ── Account scraper ───────────────────────────────────────────────────────────
@@ -347,7 +349,10 @@ async function scrapeAccount(browser, account) {
 
     const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
     const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
-    const retention   = await fetchRetention(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const retResult   = await fetchRetention(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const retention      = retResult?.combined ?? null;
+    const existingRetPct = retResult?.existingPct ?? null;
+    const newRetPct      = retResult?.newPct ?? null;
 
     const daysElapsed = p.isCurrent ? dayOfMonth() : null;
     const totalDays   = p.isCurrent ? daysInMonth(0) : null;
@@ -359,7 +364,7 @@ async function scrapeAccount(browser, account) {
 
     results.push({
       label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent,
-      sales, projectedSales, utilization, retention,
+      sales, projectedSales, utilization, retention, existingRetPct, newRetPct,
     });
   }
 

@@ -3,26 +3,24 @@
  * Large-chart, minimal-text KPI dashboard. Light, soft, feminine.
  */
 
-const THRESHOLDS = {
-  utilization: { green: 70, amber: 50 },
-  retention:   { green: 65, amber: 45 },
-};
+// Health colors based on change vs prior month, not absolute thresholds.
+// Sales: projected EOM vs prior month's full sales (±3% band = amber).
+// Utilization / Retention: current vs prior month in pp (±2pp band = amber).
 
-function healthColor(kpi, value) {
-  if (value === null) return 'neutral';
-  const t = THRESHOLDS[kpi];
-  if (!t) return 'neutral';
-  if (value >= t.green) return 'green';
-  if (value >= t.amber) return 'amber';
-  return 'red';
+function trendHealthSales(projected, priorFull) {
+  if (projected === null || priorFull === null || priorFull === 0) return 'neutral';
+  const ratio = (projected - priorFull) / priorFull;
+  if (ratio >  0.03) return 'green';
+  if (ratio < -0.03) return 'red';
+  return 'amber';
 }
 
-function salesHealth(sales, projected) {
-  if (sales === null || projected === null) return 'neutral';
-  const pct = sales / projected * 100;
-  if (pct >= 75) return 'green';
-  if (pct >= 55) return 'amber';
-  return 'red';
+function trendHealthPp(current, prior, threshold = 2) {
+  if (current === null || prior === null) return 'neutral';
+  const delta = current - prior;
+  if (delta >  threshold) return 'green';
+  if (delta < -threshold) return 'red';
+  return 'amber';
 }
 
 function fmt$(n) {
@@ -118,12 +116,79 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
-function kpiCard({ label, currentDisplay, health, chart, projRow }) {
+// Side-by-side retention chart: existing (left, health color) vs new (right, blush).
+function retentionChart(periods, health) {
+  const W = 280, H = 108;
+  const groupW = 72, gap = 13;
+  const subW = 32, subGap = 8;  // two sub-bars per group
+  const maxBarH = 58;
+  const botY = 82;
+  const labY = 97;
+  const legendY = 10;
+
+  const startX = (W - 3 * groupW - 2 * gap) / 2;
+  const curFill    = HEALTH_FILL[health] || HEALTH_FILL.neutral;
+  const newFill    = '#d4919d'; // blush for new clients
+  const pastExist  = '#e8ddd9';
+  const pastNew    = '#f0dde3';
+
+  // Scale across all values
+  const allPcts = periods.flatMap(p => [p?.existingRetPct, p?.newRetPct]).filter(v => v !== null && v > 0);
+  const maxVal = Math.max(...allPcts, 1);
+
+  // Reversed order: periods[0]=current → rightmost
+  const els = periods.map((p, i) => {
+    const pos = (periods.length - 1) - i;
+    const groupX = startX + pos * (groupW + gap);
+    const groupCx = (groupX + groupW / 2).toFixed(1);
+    const isCur = i === 0;
+
+    const exVal  = p?.existingRetPct ?? null;
+    const newVal = p?.newRetPct ?? null;
+
+    const exH  = (exVal  !== null && exVal  > 0) ? Math.max(4, Math.round((exVal  / maxVal) * maxBarH)) : 3;
+    const newH = (newVal !== null && newVal > 0) ? Math.max(4, Math.round((newVal / maxVal) * maxBarH)) : 3;
+
+    const exX  = groupX;
+    const newX = groupX + subW + subGap;
+    const exCx  = (exX  + subW / 2).toFixed(1);
+    const newCx = (newX + subW / 2).toFixed(1);
+
+    let out = '';
+    // Existing bar
+    out += `<rect x="${exX.toFixed(1)}" y="${botY - exH}" width="${subW}" height="${exH}" rx="4" fill="${isCur ? curFill : pastExist}"/>`;
+    // New bar
+    out += `<rect x="${newX.toFixed(1)}" y="${botY - newH}" width="${subW}" height="${newH}" rx="4" fill="${isCur ? newFill : pastNew}"/>`;
+    // Value labels (current month only to avoid clutter)
+    if (isCur) {
+      if (exVal  !== null) out += `<text x="${exCx}"  y="${botY - exH  - 5}" text-anchor="middle" font-size="9.5" fill="#3c2f2a" font-weight="600">${Math.round(exVal)}%</text>`;
+      if (newVal !== null) out += `<text x="${newCx}" y="${botY - newH - 5}" text-anchor="middle" font-size="9.5" fill="${newFill}" font-weight="600">${Math.round(newVal)}%</text>`;
+    } else {
+      if (exVal  !== null) out += `<text x="${exCx}"  y="${botY - exH  - 5}" text-anchor="middle" font-size="8.5" fill="#b09088">${Math.round(exVal)}%</text>`;
+      if (newVal !== null) out += `<text x="${newCx}" y="${botY - newH - 5}" text-anchor="middle" font-size="8.5" fill="#c4a0ac">${Math.round(newVal)}%</text>`;
+    }
+    // Month label centered under group
+    out += `<text x="${groupCx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
+    return out;
+  }).join('');
+
+  // Legend
+  const legend =
+    `<rect x="60" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
+    `<text x="72" y="11" font-size="8.5" fill="#b09088">Existing</text>` +
+    `<rect x="118" y="3" width="8" height="8" rx="2" fill="${newFill}"/>` +
+    `<text x="130" y="11" font-size="8.5" fill="#b09088">New</text>`;
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
+}
+
+function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false }) {
+  const mtdTag = mtd ? '<span class="mtd-tag">mtd</span>' : '';
   return `
     <div class="kpi-card ${health}">
       <div class="kpi-card-top">
         <span class="kpi-label">${label}</span>
-        <span class="kpi-value">${currentDisplay}</span>
+        <span class="kpi-value">${currentDisplay}${mtdTag}</span>
       </div>
       <div class="kpi-chart">${chart}</div>
       ${projRow ? `<div class="proj-row">${projRow}</div>` : ''}
@@ -146,7 +211,7 @@ function businessPanel(biz) {
   const [cur, m1, m2] = periods;
   const pLabels = [cur?.label, m1?.label, m2?.label];
 
-  const sh = salesHealth(cur?.sales, cur?.projectedSales);
+  const sh = trendHealthSales(cur?.projectedSales, m1?.sales);
   const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
     ? cur.projectedSales - cur.sales
     : null;
@@ -163,7 +228,7 @@ function businessPanel(biz) {
     projRow: '',
   });
 
-  const uh = healthColor('utilization', cur?.utilization);
+  const uh = trendHealthPp(cur?.utilization, m1?.utilization);
   const utilCard = kpiCard({
     label: 'Utilization',
     health: uh,
@@ -174,18 +239,15 @@ function businessPanel(biz) {
       v => v.toFixed(1) + '%'
     ),
     projRow: '',
+    mtd: true,
   });
 
-  const rh = healthColor('retention', cur?.retention);
+  const rh = trendHealthPp(cur?.retention, m1?.retention);
   const retCard = kpiCard({
     label: 'Retention',
     health: rh,
     currentDisplay: fmtPct(cur?.retention),
-    chart: bigChart(
-      [cur?.retention, m1?.retention, m2?.retention].map(v => v ?? null),
-      pLabels, rh,
-      v => Math.round(v) + '%'
-    ),
+    chart: retentionChart([cur, m1, m2], rh),
     projRow: '',
   });
 
@@ -391,6 +453,16 @@ header h1 {
 }
 .kpi-chart svg { width: 100%; height: 100%; min-height: 60px; }
 
+.mtd-tag {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: .04em;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
 .proj-row {
   font-size: 10.5px;
   color: var(--muted);
@@ -421,7 +493,7 @@ ${panels}
 </div>
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Green ≥70%/65% · Amber ≥50%/45%
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓
 </footer>
 
 </body>
