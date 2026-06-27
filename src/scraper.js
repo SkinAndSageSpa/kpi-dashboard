@@ -199,7 +199,7 @@ async function getReportFrameText(page) {
   }
   await frame.waitForLoadState('domcontentloaded').catch(() => {});
   const text = await frame.evaluate(() => document.body?.innerText || '').catch(() => null);
-  console.log(`  Frame URL: ${frame.url().split('?')[0]}...`);
+  console.log(`  Frame URL: ${frame.url()}`);
   return text;
 }
 
@@ -280,11 +280,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
   await settle(page, 3000);
 
-  if (isCurrent) {
-    await selectCustomPeriod(page, `${snapPrefix}_util`);
-  } else {
-    await selectPeriod(page, monthOption, `${snapPrefix}_util`);
-  }
+  await selectPeriod(page, monthOption, `${snapPrefix}_util`);
   await settle(page, 1000);
 
   await page.getByText('Generate', { exact: true }).first().click();
