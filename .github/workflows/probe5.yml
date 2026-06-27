@@ -1,0 +1,45 @@
+name: Probe 5 — Frame Inspector
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Account to probe'
+        required: false
+        default: 'waxon'
+        type: choice
+        options: [waxon, skinsage]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROBE_DIR: /tmp/probe5-results
+      PROBE_ACCOUNT: ${{ inputs.account }}
+      SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
+      WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run probe5
+        run: node src/probe5.js
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe5-results
+          path: /tmp/probe5-results/
+          retention-days: 7
