@@ -1,0 +1,12 @@
+{
+  "name": "kpi-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "probe": "node src/probe.js",
+    "scrape": "node src/scraper.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

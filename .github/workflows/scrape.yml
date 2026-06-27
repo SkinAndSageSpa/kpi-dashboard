@@ -1,0 +1,47 @@
+name: Generate KPI Dashboard
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 6am PT daily (UTC-8)
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SCREENSHOT_DIR: /tmp/kpi-screenshots
+      DASHBOARD_OUT: dashboard.html
+      SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
+      WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Scrape KPI data
+        run: node src/scraper.js
+
+      - name: Upload dashboard
+        uses: actions/upload-artifact@v4
+        with:
+          name: kpi-dashboard
+          path: dashboard.html
+          retention-days: 30
+
+      - name: Upload screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kpi-screenshots
+          path: /tmp/kpi-screenshots/
+          retention-days: 7
