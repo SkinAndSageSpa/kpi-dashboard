@@ -116,68 +116,68 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
-// Side-by-side retention chart: existing (left, health color) vs new (right, blush).
+// Single consolidated bar per month (combined retention) with a dot overlay
+// marking new-client retention. White circle with rose border sits at the
+// height corresponding to new%, so you can see how new clients compare.
 function retentionChart(periods, health) {
   const W = 280, H = 108;
-  const groupW = 72, gap = 13;
-  const subW = 32, subGap = 8;  // two sub-bars per group
+  const barW = 72, gap = 13;
   const maxBarH = 58;
   const botY = 82;
   const labY = 97;
-  const legendY = 10;
 
-  const startX = (W - 3 * groupW - 2 * gap) / 2;
-  const curFill    = HEALTH_FILL[health] || HEALTH_FILL.neutral;
-  const newFill    = '#d4919d'; // blush for new clients
-  const pastExist  = '#e8ddd9';
-  const pastNew    = '#f0dde3';
+  const allVals = periods.map(p => p?.retention).filter(v => v !== null && v > 0);
+  const maxVal = Math.max(...allVals, 1);
 
-  // Scale across all values
-  const allPcts = periods.flatMap(p => [p?.existingRetPct, p?.newRetPct]).filter(v => v !== null && v > 0);
-  const maxVal = Math.max(...allPcts, 1);
+  const startX = (W - 3 * barW - 2 * gap) / 2;
+  const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
-  // Reversed order: periods[0]=current → rightmost
   const els = periods.map((p, i) => {
     const pos = (periods.length - 1) - i;
-    const groupX = startX + pos * (groupW + gap);
-    const groupCx = (groupX + groupW / 2).toFixed(1);
+    const x = startX + pos * (barW + gap);
+    const cx = (x + barW / 2).toFixed(1);
     const isCur = i === 0;
 
-    const exVal  = p?.existingRetPct ?? null;
-    const newVal = p?.newRetPct ?? null;
+    const combined = p?.retention ?? null;
+    const newPct   = p?.newRetPct ?? null;
 
-    const exH  = (exVal  !== null && exVal  > 0) ? Math.max(4, Math.round((exVal  / maxVal) * maxBarH)) : 3;
-    const newH = (newVal !== null && newVal > 0) ? Math.max(4, Math.round((newVal / maxVal) * maxBarH)) : 3;
-
-    const exX  = groupX;
-    const newX = groupX + subW + subGap;
-    const exCx  = (exX  + subW / 2).toFixed(1);
-    const newCx = (newX + subW / 2).toFixed(1);
+    const fill = isCur ? curFill : '#e8ddd9';
+    const barH = (combined !== null && combined > 0)
+      ? Math.max(6, Math.round((combined / maxVal) * maxBarH)) : 5;
+    const barY = botY - barH;
 
     let out = '';
-    // Existing bar
-    out += `<rect x="${exX.toFixed(1)}" y="${botY - exH}" width="${subW}" height="${exH}" rx="4" fill="${isCur ? curFill : pastExist}"/>`;
-    // New bar
-    out += `<rect x="${newX.toFixed(1)}" y="${botY - newH}" width="${subW}" height="${newH}" rx="4" fill="${isCur ? newFill : pastNew}"/>`;
-    // Value labels (current month only to avoid clutter)
-    if (isCur) {
-      if (exVal  !== null) out += `<text x="${exCx}"  y="${botY - exH  - 5}" text-anchor="middle" font-size="9.5" fill="#3c2f2a" font-weight="600">${Math.round(exVal)}%</text>`;
-      if (newVal !== null) out += `<text x="${newCx}" y="${botY - newH - 5}" text-anchor="middle" font-size="9.5" fill="${newFill}" font-weight="600">${Math.round(newVal)}%</text>`;
-    } else {
-      if (exVal  !== null) out += `<text x="${exCx}"  y="${botY - exH  - 5}" text-anchor="middle" font-size="8.5" fill="#b09088">${Math.round(exVal)}%</text>`;
-      if (newVal !== null) out += `<text x="${newCx}" y="${botY - newH - 5}" text-anchor="middle" font-size="8.5" fill="#c4a0ac">${Math.round(newVal)}%</text>`;
+    // Consolidated bar
+    out += `<rect x="${x.toFixed(1)}" y="${barY}" width="${barW}" height="${barH}" rx="5" fill="${fill}"/>`;
+
+    // Combined % label above bar
+    if (combined !== null && combined > 0) {
+      const col = isCur ? '#3c2f2a' : '#b09088';
+      const fw  = isCur ? '600' : '400';
+      out += `<text x="${cx}" y="${barY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}">${Math.round(combined)}%</text>`;
     }
-    // Month label centered under group
-    out += `<text x="${groupCx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
+
+    // Dot overlay at new-client retention height
+    if (newPct !== null && newPct > 0) {
+      const dotH = Math.max(4, Math.round((newPct / maxVal) * maxBarH));
+      const dotY = botY - dotH;
+      out += `<circle cx="${cx}" cy="${dotY}" r="4.5" fill="#ffffff" stroke="#d4919d" stroke-width="2"/>`;
+      // New% label to the right of dot, current month only
+      if (isCur) {
+        out += `<text x="${(parseFloat(cx) + 9).toFixed(1)}" y="${(dotY + 3.5).toFixed(1)}" font-size="9" fill="#d4919d" font-weight="600">${Math.round(newPct)}%</text>`;
+      }
+    }
+
+    out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
     return out;
   }).join('');
 
   // Legend
   const legend =
-    `<rect x="60" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
-    `<text x="72" y="11" font-size="8.5" fill="#b09088">Existing</text>` +
-    `<rect x="118" y="3" width="8" height="8" rx="2" fill="${newFill}"/>` +
-    `<text x="130" y="11" font-size="8.5" fill="#b09088">New</text>`;
+    `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
+    `<text x="66" y="11" font-size="8.5" fill="#b09088">Combined</text>` +
+    `<circle cx="119" cy="7" r="4" fill="#ffffff" stroke="#d4919d" stroke-width="1.5"/>` +
+    `<text x="127" y="11" font-size="8.5" fill="#b09088">New clients</text>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
