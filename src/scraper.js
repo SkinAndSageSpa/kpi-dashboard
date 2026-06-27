@@ -99,6 +99,64 @@ async function dismissOverlays(page) {
 // Use .last() when selecting a month that matches the current trigger text
 // (both the trigger and the dropdown option show the same string).
 
+// For the current month's BI Appointments report, use a Custom date range
+// (1st of month → today) instead of the full month name. This excludes
+// future scheduled hours from the available-hours denominator, giving true MTD.
+async function selectCustomPeriod(page, snapPrefix) {
+  const now   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const mm    = String(now.getMonth() + 1).padStart(2, '0');
+  const dd    = String(now.getDate()).padStart(2, '0');
+  const yyyy  = now.getFullYear();
+  const start = `${mm}/01/${yyyy}`;
+  const end   = `${mm}/${dd}/${yyyy}`;
+  console.log(`  Selecting custom period: ${start} → ${end}`);
+
+  await dismissOverlays(page);
+  const PERIOD_RE = /Today \(|Yesterday \(|This Week|Last Week|Last Two|Custom|January|February|March|April|May|June|July|August|September|October|November|December/;
+  const trigger = page.getByText(PERIOD_RE, { exact: false }).first();
+  if (!await trigger.isVisible({ timeout: 5000 }).catch(() => false)) {
+    console.warn('  Period trigger not found for custom range');
+    return;
+  }
+  await trigger.click();
+  await page.waitForTimeout(1800);
+  if (snapPrefix) await snap(page, `${snapPrefix}_picker_open`);
+
+  // Click the "Custom" option in the dropdown
+  const customOpt = page.getByText('Custom', { exact: true });
+  const customCount = await customOpt.count().catch(() => 0);
+  if (customCount === 0) {
+    console.warn('  "Custom" option not found — falling back to month name');
+    await page.keyboard.press('Escape');
+    return;
+  }
+  await customOpt.last().click();
+  await page.waitForTimeout(1500);
+  if (snapPrefix) await snap(page, `${snapPrefix}_custom_selected`);
+
+  // Fill start and end date inputs (Mangomint uses MM/DD/YYYY text inputs)
+  const textInputs = page.locator('input[type="text"]').filter({ visible: true });
+  const inputCount = await textInputs.count();
+  console.log(`  Visible text inputs after Custom: ${inputCount}`);
+
+  if (inputCount >= 2) {
+    await textInputs.nth(0).click({ clickCount: 3 });
+    await page.waitForTimeout(100);
+    await textInputs.nth(0).type(start, { delay: 50 });
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(400);
+    await textInputs.nth(1).click({ clickCount: 3 });
+    await page.waitForTimeout(100);
+    await textInputs.nth(1).type(end, { delay: 50 });
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(500);
+    if (snapPrefix) await snap(page, `${snapPrefix}_dates_filled`);
+    console.log(`  Filled custom dates: ${start} → ${end}`);
+  } else {
+    console.warn(`  Expected ≥2 text inputs, found ${inputCount} — custom range may not apply`);
+  }
+}
+
 async function selectPeriod(page, targetOption, snapPrefix) {
   console.log(`  Selecting period: "${targetOption}"`);
   await dismissOverlays(page);
@@ -212,8 +270,8 @@ async function fetchSales(page, base, monthOption, snapPrefix) {
  *   cols[0] = "All Selected"
  *   cols[3] = 52.09 (Booked %)
  */
-async function fetchUtilization(page, base, monthOption, snapPrefix) {
-  console.log(`\n  [Utilization] ${monthOption}`);
+async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false) {
+  console.log(`\n  [Utilization] ${monthOption}${isCurrent ? ' (MTD custom range)' : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
@@ -222,7 +280,11 @@ async function fetchUtilization(page, base, monthOption, snapPrefix) {
   await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
   await settle(page, 3000);
 
-  await selectPeriod(page, monthOption, `${snapPrefix}_util`);
+  if (isCurrent) {
+    await selectCustomPeriod(page, `${snapPrefix}_util`);
+  } else {
+    await selectPeriod(page, monthOption, `${snapPrefix}_util`);
+  }
   await settle(page, 1000);
 
   await page.getByText('Generate', { exact: true }).first().click();
@@ -348,7 +410,7 @@ async function scrapeAccount(browser, account) {
     console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}") ──`);
 
     const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
-    const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
+    const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
     const retResult   = await fetchRetention(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;

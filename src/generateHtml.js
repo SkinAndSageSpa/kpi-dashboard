@@ -321,7 +321,7 @@ body {
 
 header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
   flex-shrink: 0;
@@ -332,7 +332,25 @@ header h1 {
   font-weight: 300;
   font-size: 20px;
 }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .gen-time { font-size: 11px; color: var(--muted); }
+.refresh-btn {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rose);
+  background: var(--rose-bg);
+  border: 1px solid #f0c0cc;
+  border-radius: 8px;
+  padding: 4px 11px;
+  text-decoration: none;
+  letter-spacing: .03em;
+  transition: opacity .15s;
+}
+.refresh-btn:hover { opacity: .75; }
 
 .error-banner {
   margin-bottom: 8px;
@@ -483,7 +501,10 @@ footer {
 
 <header>
   <h1>Business Dashboard</h1>
-  <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
+  <div class="header-right">
+    <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
+    <a class="refresh-btn" href="https://github.com/SkinAndSageSpa/kpi-dashboard/actions/workflows/scrape.yml" target="_blank">↻ Refresh</a>
+  </div>
 </header>
 
 ${errorBanner}
