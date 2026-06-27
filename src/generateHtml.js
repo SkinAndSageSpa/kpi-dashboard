@@ -59,31 +59,60 @@ const HEALTH_FILL = {
   green: '#5a8a6e', amber: '#c07848', red: '#c2546b', neutral: '#d4c0bc',
 };
 
-// Full-width 3-bar chart. Values shown above bars, months below.
-function bigChart(values, labels, health, fmtBar) {
+// Full-width 3-bar chart. Oldest month left, current month right.
+// projectedTop: extra height to stack on the current bar (projected - actual sales).
+function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   const W = 280, H = 100;
   const barW = 72, gap = 13;
   const maxBarH = 64;
   const botY = 80;
   const labY = 95;
 
-  const maxVal = Math.max(...values.filter(v => v !== null && v > 0), 1);
+  // Include projected total in scale so stacked bar doesn't overflow
+  const allVals = values.filter(v => v !== null && v > 0);
+  if (projectedTop !== null && values[0] !== null && values[0] > 0) {
+    allVals.push(values[0] + projectedTop);
+  }
+  const maxVal = Math.max(...allVals, 1);
+
   const startX = (W - 3 * barW - 2 * gap) / 2;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = values.map((v, i) => {
-    const h = (v !== null && v > 0) ? Math.max(6, Math.round((v / maxVal) * maxBarH)) : 5;
-    const x = startX + i * (barW + gap);
-    const y = botY - h;
+    // Reverse: i=0 (newest/current) → rightmost position
+    const pos = (values.length - 1) - i;
+    const x = startX + pos * (barW + gap);
     const cx = (x + barW / 2).toFixed(1);
-    const fill = i === 0 ? curFill : '#e8ddd9';
-    const hasVal = v !== null && v > 0;
-    const valStr = hasVal ? fmtBar(v) : '';
-    const textCol = i === 0 ? '#3c2f2a' : '#b09088';
-    const fw = i === 0 ? '600' : '400';
-    return `<rect x="${x.toFixed(1)}" y="${y}" width="${barW}" height="${h}" rx="5" fill="${fill}"/>` +
-      (valStr ? `<text x="${cx}" y="${y - 6}" text-anchor="middle" font-size="10" fill="${textCol}" font-weight="${fw}">${valStr}</text>` : '') +
-      `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(labels[i] || '')}</text>`;
+    const isCurrent = i === 0;
+
+    const actualH = (v !== null && v > 0) ? Math.max(6, Math.round((v / maxVal) * maxBarH)) : 5;
+    const actualY = botY - actualH;
+    const fill = isCurrent ? curFill : '#e8ddd9';
+
+    let out = '';
+
+    if (isCurrent && projectedTop !== null && projectedTop > 0) {
+      // Draw projected shell first (full stacked height, semi-transparent)
+      const totalH = Math.max(actualH, Math.round(((v + projectedTop) / maxVal) * maxBarH));
+      const projY = botY - totalH;
+      out += `<rect x="${x.toFixed(1)}" y="${projY}" width="${barW}" height="${totalH}" rx="5" fill="${curFill}" opacity="0.25"/>`;
+      // Draw solid actual on top of it
+      out += `<rect x="${x.toFixed(1)}" y="${actualY}" width="${barW}" height="${actualH}" rx="5" fill="${curFill}"/>`;
+      // Projected total label above full stack
+      const projLabel = fmtBar(v + projectedTop);
+      out += `<text x="${cx}" y="${projY - 6}" text-anchor="middle" font-size="10" fill="${curFill}" font-weight="500">${projLabel}</text>`;
+    } else {
+      out += `<rect x="${x.toFixed(1)}" y="${actualY}" width="${barW}" height="${actualH}" rx="5" fill="${fill}"/>`;
+      // Value label above bar
+      const hasVal = v !== null && v > 0;
+      const valStr = hasVal ? fmtBar(v) : '';
+      const textCol = isCurrent ? '#3c2f2a' : '#b09088';
+      const fw = isCurrent ? '600' : '400';
+      if (valStr) out += `<text x="${cx}" y="${actualY - 6}" text-anchor="middle" font-size="10" fill="${textCol}" font-weight="${fw}">${valStr}</text>`;
+    }
+
+    out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(labels[i] || '')}</text>`;
+    return out;
   }).join('');
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
@@ -118,6 +147,9 @@ function businessPanel(biz) {
   const pLabels = [cur?.label, m1?.label, m2?.label];
 
   const sh = salesHealth(cur?.sales, cur?.projectedSales);
+  const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
+    ? cur.projectedSales - cur.sales
+    : null;
   const salesCard = kpiCard({
     label: 'Sales',
     health: sh,
@@ -125,11 +157,10 @@ function businessPanel(biz) {
     chart: bigChart(
       [cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null),
       pLabels, sh,
-      v => '$' + (v >= 1000 ? Math.round(v / 1000) + 'k' : Math.round(v))
+      v => '$' + (v >= 1000 ? Math.round(v / 1000) + 'k' : Math.round(v)),
+      projectedTop
     ),
-    projRow: cur?.projectedSales
-      ? `Projected EOM <strong>${fmt$(cur?.projectedSales)}</strong>`
-      : '',
+    projRow: '',
   });
 
   const uh = healthColor('utilization', cur?.utilization);
