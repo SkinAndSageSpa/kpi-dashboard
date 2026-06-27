@@ -2,20 +2,27 @@
  * scraper.js
  * Scrapes KPI data from both Mangomint accounts and writes dashboard.html.
  *
- * Reports (confirmed from probe runs):
- *   Sales Summary        → /reports → "Sales Summary" → month picker → Generate
- *                          Parse: "Total" row → last dollar value = Adjusted Total
+ * Report rendering: Mangomint renders each generated report inside an <iframe>
+ * at https://app.mangomint.com/api/v1/reports/<name>/html?settings=...
+ * The iframe innerText is clean tab-separated data with a summary row at the bottom.
  *
- *   Business Intelligence: Appointments → month picker → Generate
- *                          Parse: "All Selected" row → Hours Booked %
- *                          Column layout: [Staff] [Avail.#] [Booked#] [Booked%] ...
+ * Confirmed column layouts (from probe5 runs):
  *
- *   Client Retention     → month picker (months, not date range) → Generate
- *                          Parse: sum each staff's Existing/New Retained-180 # and Total #
- *                          Formula: (existingRetained180 + newRetained180) / (existingTotal + newTotal)
+ *   Sales Summary → "Total" row (last row):
+ *     Date | #Sales | #Services | Service Sales | #Products | Product Sales |
+ *     Subtotal | Taxes | Tips | Gross Total | Refunds | Adjusted Total (last col)
  *
- * Date picker options (confirmed): "June 2026", "May 2026", "April 2026", "Custom Time Period", ...
- * Tables are div-based (no <table> element) — parse via document.body.textContent.
+ *   Business Intelligence: Appointments → "All Selected" row:
+ *     Staff | Avail.# | Booked# | Booked% | ...
+ *     cols[0]="All Selected", cols[3]=Booked %
+ *
+ *   Client Retention → "All Selected Staff" row:
+ *     Staff | ExistingTotal# | ExistRet30# | ExistRet30% | ExistRet60# | ExistRet60% |
+ *     ExistRet90# | ExistRet90% | ExistRet180# | ExistRet180% |
+ *     NewTotal# | NewRet30# | NewRet30% | NewRet60# | NewRet60% |
+ *     NewRet90# | NewRet90% | NewRet180# | NewRet180%
+ *     cols[1]=ExistTotal, cols[8]=ExistRet180#, cols[10]=NewTotal, cols[17]=NewRet180#
+ *     Formula: (cols[8] + cols[17]) / (cols[1] + cols[10]) * 100
  *
  * Env vars:
  *   SKINSAGE_MANGOMINT_COOKIES
@@ -40,24 +47,14 @@ function ptNow() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
 }
 
-function todayPT() {
-  const n = ptNow();
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-}
-
-// "June 2026" for N months ago
 function monthPickerLabel(monthsAgo = 0) {
   const n = ptNow();
   const d = new Date(n.getFullYear(), n.getMonth() - monthsAgo, 1);
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
-// "June 2026" → display label for the dashboard
-function monthLabel(monthsAgo = 0) {
-  return monthPickerLabel(monthsAgo);
-}
+function monthLabel(monthsAgo = 0) { return monthPickerLabel(monthsAgo); }
 
-// Days in month N months ago
 function daysInMonth(monthsAgo = 0) {
   const n = ptNow();
   return new Date(n.getFullYear(), n.getMonth() - monthsAgo + 1, 0).getDate();
@@ -98,50 +95,54 @@ async function dismissOverlays(page) {
 }
 
 // ── Period picker ─────────────────────────────────────────────────────────────
-// Confirmed options: "June 2026", "May 2026", "April 2026", "Custom Time Period", ...
-// The trigger shows the current selection ("Today (Jun 27)" or "June 2026" etc.).
-// Mangomint uses hashed React CSS Modules — never target by class name here.
-//
-// Edge case: when the picker already shows "June 2026" AND the dropdown also lists
-// "June 2026", we have two elements with the same text in the DOM.
-// Using .last() picks the dropdown item (rendered later in DOM order than the trigger).
+// Confirmed: trigger text patterns "Today (Jun 27)", "June 2026", etc.
+// Use .last() when selecting a month that matches the current trigger text
+// (both the trigger and the dropdown option show the same string).
 
 async function selectPeriod(page, targetOption, snapPrefix) {
   console.log(`  Selecting period: "${targetOption}"`);
   await dismissOverlays(page);
 
-  // Click the picker trigger — matches any visible period text.
-  // Probe confirmed: "Today (Jun 27)", month names like "June 2026", etc.
   const PERIOD_RE = /Today \(|Yesterday \(|This Week|Last Week|Last Two|Custom|January|February|March|April|May|June|July|August|September|October|November|December/;
   const trigger = page.getByText(PERIOD_RE, { exact: false }).first();
   if (!await trigger.isVisible({ timeout: 5000 }).catch(() => false)) {
-    console.warn('  Period trigger not found — skipping selectPeriod');
+    console.warn('  Period trigger not found');
     return;
   }
   await trigger.click();
   await page.waitForTimeout(1800);
   if (snapPrefix) await snap(page, `${snapPrefix}_picker_open`);
 
-  // Click target option. Use .last() to avoid re-clicking the trigger when
-  // trigger text matches option text (both showing same month name).
   const options = page.getByText(targetOption, { exact: true });
   const count = await options.count().catch(() => 0);
   if (count === 0) {
-    console.warn(`  Option "${targetOption}" not found — closing picker`);
+    console.warn(`  Option "${targetOption}" not found`);
     await page.keyboard.press('Escape');
     return;
   }
   await options.last().click();
   await page.waitForTimeout(800);
-  console.log(`  Selected: "${targetOption}" (${count} match(es), clicked last)`);
+  console.log(`  Selected: "${targetOption}" (${count} match(es))`);
 }
 
-// ── Parsing: get all body text via textContent (CSS-agnostic) ─────────────────
-// The report tables are div-based (no <table> element confirmed in probe runs).
-// document.body.textContent captures all text regardless of CSS visibility.
+// ── Report iframe access ──────────────────────────────────────────────────────
+// After clicking Generate + settling, Mangomint renders the report inside an
+// <iframe class="ReportDetailsWrapper_reportIFrame__..."> that loads:
+//   https://app.mangomint.com/api/v1/reports/<name>/html?settings=...
+// The iframe innerText contains clean tab-separated data rows + a summary row.
 
-async function bodyTextContent(page) {
-  return page.evaluate(() => document.body.textContent || '');
+async function getReportFrameText(page) {
+  const frame = page.frames().find(
+    f => f.url().includes('/api/v1/reports/') && f.url().includes('/html')
+  );
+  if (!frame) {
+    console.warn(`  No report iframe found. Active frames: ${page.frames().map(f => f.url()).join(' | ')}`);
+    return null;
+  }
+  await frame.waitForLoadState('domcontentloaded').catch(() => {});
+  const text = await frame.evaluate(() => document.body?.innerText || '').catch(() => null);
+  console.log(`  Frame URL: ${frame.url().split('?')[0]}...`);
+  return text;
 }
 
 // Parse "$1,234.56" → 1234.56
@@ -150,25 +151,22 @@ function parseDollar(str) {
   return isNaN(n) ? null : n;
 }
 
-// Parse "78.33" or "78.33%" → 78.33
-function parsePct(str) {
-  const n = parseFloat((str || '').replace(/[^0-9.]/g, ''));
-  return isNaN(n) ? null : n;
-}
-
-// Parse an integer from a string like "133" or "133\n"
-function parseCount(str) {
-  const n = parseInt((str || '').replace(/[^0-9]/g, ''), 10);
-  return isNaN(n) ? null : n;
+// Parse a tab-separated report row into an array of column values
+function parseRow(line) {
+  return line.split('\t').map(s => s.trim());
 }
 
 // ── Report fetchers ───────────────────────────────────────────────────────────
 
 /**
- * Sales Summary → Adjusted Total for the month.
- * Table columns: Date | # Sales | # Services | Service Sales | # Products |
- *   Product Sales | Subtotal | Taxes | Tips | Gross Total | Refunds | Adjusted Total
- * "Total" row at bottom has the month aggregate.
+ * Sales Summary → Adjusted Total (last column of the "Total" row).
+ *
+ * Confirmed column layout (from probe5):
+ * Date | #Sales | #Services | Service Sales | #Products | Product Sales |
+ * Subtotal | Taxes | Tips | Gross Total | Refunds | Adjusted Total
+ *
+ * "Total" line example:
+ * Total\t412\t544\t$30,180.50\t23\t$308.00\t$30,488.50\t$32.56\t$5,760.81\t$36,281.87\t$0.00\t$36,281.87
  */
 async function fetchSales(page, base, monthOption, snapPrefix) {
   console.log(`\n  [Sales] ${monthOption}`);
@@ -184,41 +182,35 @@ async function fetchSales(page, base, monthOption, snapPrefix) {
   await settle(page, 1000);
 
   await page.getByText('Generate', { exact: true }).first().click();
-  await settle(page, 6000);
+  await settle(page, 7000);
   await snap(page, `${snapPrefix}_sales_generated`);
 
-  // Wait for "Total" row to appear in the DOM
-  await page.getByText('Total', { exact: true }).first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const text = await getReportFrameText(page);
+  if (!text) return null;
 
-  const text = await bodyTextContent(page);
-
-  // The "Total" row ends with the Adjusted Total dollar value.
-  // Pattern in body text: "Total" ... "$X,XXX.XX" (last dollar in the Total line context)
-  // Strategy: split on "Total", take the chunk after the last "Total", find last dollar amount.
-  const totalIdx = text.lastIndexOf('Total');
-  if (totalIdx === -1) {
-    console.warn('  [Sales] "Total" not found in page text');
-    await snap(page, `${snapPrefix}_sales_parse_fail`);
+  const lines = text.split('\n');
+  const totalLine = lines.find(l => l.startsWith('Total\t'));
+  if (!totalLine) {
+    console.warn(`  [Sales] "Total" row not found. First 3 lines: ${lines.slice(0, 3).join(' | ')}`);
     return null;
   }
 
-  const afterTotal = text.slice(totalIdx, totalIdx + 500);
-  const dollars = [...afterTotal.matchAll(/\$[\d,]+\.?\d*/g)].map(m => parseDollar(m[0]));
-  if (dollars.length === 0) {
-    console.warn('  [Sales] No dollar amounts found after "Total"');
-    return null;
-  }
-
-  // The Adjusted Total is the LAST dollar value on the Total row
-  const adjustedTotal = dollars[dollars.length - 1];
-  console.log(`  [Sales] Adjusted Total = $${adjustedTotal?.toLocaleString()}`);
+  const cols = parseRow(totalLine);
+  const adjustedTotal = parseDollar(cols[cols.length - 1]); // last column
+  console.log(`  [Sales] Adjusted Total = ${cols[cols.length - 1]} → ${adjustedTotal}`);
   return adjustedTotal;
 }
 
 /**
- * Business Intelligence: Appointments → Hours Booked % for "All Selected" (all staff).
- * Table: [Staff] [Hours: Avail.# Booked# %] [Appointments(All): Total# ...] [Appointments(New): ...]
- * "All Selected" summary row appears at the bottom after all staff rows.
+ * Business Intelligence: Appointments → Hours Booked % ("All Selected" row, cols[3]).
+ *
+ * Confirmed column layout (from probe5):
+ * Staff | Avail.# | Booked# | Booked% | Total# | Requested# | Req% | Walk-ins# | Walk% | Prebookings# | Pre% | ...
+ *
+ * "All Selected" line example:
+ * All Selected\t487.33\t253.84\t52.09\t496\t...
+ *   cols[0] = "All Selected"
+ *   cols[3] = 52.09 (Booked %)
  */
 async function fetchUtilization(page, base, monthOption, snapPrefix) {
   console.log(`\n  [Utilization] ${monthOption}`);
@@ -234,41 +226,38 @@ async function fetchUtilization(page, base, monthOption, snapPrefix) {
   await settle(page, 1000);
 
   await page.getByText('Generate', { exact: true }).first().click();
-  await settle(page, 6000);
+  await settle(page, 7000);
   await snap(page, `${snapPrefix}_util_generated`);
 
-  // Wait for the generated report text to appear
-  await page.getByText('All Selected', { exact: true }).first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const text = await getReportFrameText(page);
+  if (!text) return null;
 
-  const text = await bodyTextContent(page);
-
-  // "All Selected" row: look for "All Selected" then read Avail, Booked, % in sequence.
-  // The body text chunk after "All Selected" contains: avail# \n booked# \n pct% \n ...
-  const allSelectedIdx = text.indexOf('All Selected');
-  if (allSelectedIdx === -1) {
-    // Fallback: look for the last occurrence of a standalone percentage after the table header
-    // The "%" column value for the total is the last standalone % number in the Hours section
-    console.warn('  [Utilization] "All Selected" not found — trying percentage fallback');
-    const pctMatches = [...text.matchAll(/(\d{1,3}\.\d{2})/g)].map(m => parseFloat(m[1]));
-    const util = pctMatches.find(n => n > 0 && n <= 100) ?? null;
-    console.log(`  [Utilization] fallback util = ${util}%`);
-    return util;
+  const lines = text.split('\n');
+  const allSelectedLine = lines.find(l => l.startsWith('All Selected\t'));
+  if (!allSelectedLine) {
+    console.warn(`  [Utilization] "All Selected" row not found. Lines: ${lines.slice(0, 8).join(' | ')}`);
+    return null;
   }
 
-  // Extract the chunk after "All Selected"
-  const afterAllSelected = text.slice(allSelectedIdx + 'All Selected'.length, allSelectedIdx + 200);
-  // Numbers appear as: avail# \n booked# \n pct \n ...
-  const nums = [...afterAllSelected.matchAll(/(\d+\.?\d*)/g)].map(m => parseFloat(m[1]));
-  // nums[0] = avail#, nums[1] = booked#, nums[2] = booked%
-  const util = nums.length >= 3 ? nums[2] : (nums.length >= 1 ? nums[0] : null);
-  console.log(`  [Utilization] All Selected Hours Booked% = ${util}%`);
-  return util;
+  const cols = parseRow(allSelectedLine);
+  // cols[0]="All Selected", cols[1]=Avail#, cols[2]=Booked#, cols[3]=Booked%
+  const util = parseFloat(cols[3]);
+  console.log(`  [Utilization] All Selected → Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
+  return isNaN(util) ? null : util;
 }
 
 /**
- * Client Retention → (existingRetained180 + newRetained180) / (existingTotal + newTotal)
- * Table: [Staff] [Existing: Total# | Ret30#% | Ret60#% | Ret90#% | Ret180#%] [New: Total# | ...]
- * Sums across all staff rows.
+ * Client Retention → (existingRet180 + newRet180) / (existingTotal + newTotal) * 100.
+ *
+ * Confirmed column layout (from probe5):
+ * Staff | ExistTotal# | ExistRet30# | ExistRet30% | ExistRet60# | ExistRet60% |
+ *   ExistRet90# | ExistRet90% | ExistRet180# | ExistRet180% |
+ *   NewTotal# | NewRet30# | NewRet30% | NewRet60# | NewRet60% |
+ *   NewRet90# | NewRet90% | NewRet180# | NewRet180%
+ *
+ * "All Selected Staff" line example:
+ * All Selected Staff\t370\t35\t9.46\t77\t20.81\t80\t21.62\t80\t21.62\t58\t4\t6.90\t10\t17.24\t10\t17.24\t10\t17.24
+ *   cols[1]=370 (existing total), cols[8]=80 (existing ret180), cols[10]=58 (new total), cols[17]=10 (new ret180)
  */
 async function fetchRetention(page, base, monthOption, snapPrefix) {
   console.log(`\n  [Retention] ${monthOption}`);
@@ -284,95 +273,32 @@ async function fetchRetention(page, base, monthOption, snapPrefix) {
   await settle(page, 1000);
 
   await page.getByText('Generate', { exact: true }).first().click();
-  await settle(page, 6000);
+  await settle(page, 7000);
   await snap(page, `${snapPrefix}_ret_generated`);
 
-  const text = await bodyTextContent(page);
+  const text = await getReportFrameText(page);
+  if (!text) return null;
 
-  // The retention table structure (from screenshots):
-  //   Existing Clients section: Total # | Ret30 #% | Ret60 #% | Ret90 #% | Ret180 #%
-  //   New Clients section:      Total # | Ret30 #% | Ret60 #% | Ret90 #% | Ret180 #%
-  //
-  // We need to sum ACROSS ALL STAFF (not just read one row).
-  // Strategy: locate "Existing Clients" and "New Clients" section starts,
-  // then extract and sum the relevant column values from all staff rows.
-  //
-  // Alternative simpler strategy: the body text contains all numbers. We parse
-  // each staff row as a repeating pattern and sum columns by position.
-  //
-  // Each staff row in the Existing section has this value pattern:
-  //   [total#] [ret30#] [ret30%] [ret60#] [ret60%] [ret90#] [ret90%] [ret180#] [ret180%]
-  // Then the New Clients section for the same staff row:
-  //   [total#] [ret30#] [ret30%] [ret60#] [ret60%] [ret90#] [ret90%] [ret180#] [ret180%]
-  //
-  // We'll try using Playwright's locator to directly target the "Retained within 180 days" columns.
-
-  // Approach: find all elements with "Retained within\n180 days" in headers,
-  // then get values in those columns for all rows, including the totals row if present.
-  //
-  // Simpler backup: look for a "Total" summary row at the bottom which sums all staff.
-  // If that exists, read from it. Otherwise sum individual rows.
-
-  const totalIdx = text.lastIndexOf('\nTotal\n');
-  let existingTotal = null, existingRet180 = null, newTotal = null, newRet180 = null;
-
-  if (totalIdx !== -1) {
-    // Total row pattern: [existingTotal, ret30#, ret30%, ret60#, ret60%, ret90#, ret90%, ret180#, ret180%, newTotal, ...]
-    const afterTotal = text.slice(totalIdx, totalIdx + 400);
-    const nums = [...afterTotal.matchAll(/(\d+\.?\d*)/g)].map(m => parseFloat(m[1]));
-    // Column layout confirmed from screenshots:
-    // Existing: [0]=total, [1]=ret30#, [2]=ret30%, [3]=ret60#, [4]=ret60%, [5]=ret90#, [6]=ret90%, [7]=ret180#, [8]=ret180%
-    // New:      [9]=total, [10]=ret30#, [11]=ret30%, ... [16]=ret180#, [17]=ret180%
-    if (nums.length >= 18) {
-      existingTotal  = nums[0];
-      existingRet180 = nums[7];
-      newTotal       = nums[9];
-      newRet180      = nums[16];
-    } else if (nums.length >= 9) {
-      existingTotal  = nums[0];
-      existingRet180 = nums[7];
-    }
+  const lines = text.split('\n');
+  const allStaffLine = lines.find(l => l.startsWith('All Selected Staff\t'));
+  if (!allStaffLine) {
+    console.warn(`  [Retention] "All Selected Staff" row not found. Lines: ${lines.slice(0, 8).join(' | ')}`);
+    return null;
   }
 
-  if (existingTotal === null) {
-    // No "Total" row — sum across all staff rows by scanning the text.
-    // Each staff name is followed by numbers. This is fragile but better than nothing.
-    // We look for the pattern between "Existing Clients" and "New Clients" headers.
-    const existingStart = text.indexOf('Existing Clients');
-    const newStart = text.indexOf('New Clients');
-    if (existingStart !== -1 && newStart !== -1) {
-      const existingSection = text.slice(existingStart, newStart);
-      const newSection = text.slice(newStart, newStart + 2000);
-
-      // In each section, after the header row, numbers appear in repeating groups.
-      // Group: total#, ret30#, ret30%, ret60#, ret60%, ret90#, ret90%, ret180#, ret180%
-      const existingNums = [...existingSection.matchAll(/(\d+\.?\d*)/g)].map(m => parseFloat(m[1]));
-      const newNums      = [...newSection.matchAll(/(\d+\.?\d*)/g)].map(m => parseFloat(m[1]));
-
-      // Skip the header row numbers (column count label like "9" or "0") and sum column 0 and column 7
-      // This is an approximation — sum of all total# values and all ret180# values
-      let exTotal = 0, exRet180 = 0, nTotal = 0, nRet180 = 0;
-      const GROUP = 9; // values per staff row
-      for (let i = 0; i + GROUP <= existingNums.length; i += GROUP) {
-        exTotal  += existingNums[i];
-        exRet180 += existingNums[i + 7];
-      }
-      for (let i = 0; i + GROUP <= newNums.length; i += GROUP) {
-        nTotal  += newNums[i];
-        nRet180 += newNums[i + 7];
-      }
-      existingTotal = exTotal; existingRet180 = exRet180;
-      newTotal = nTotal;       newRet180 = nRet180;
-    }
-  }
-
-  const totalClients = (existingTotal || 0) + (newTotal || 0);
-  const retained     = (existingRet180 || 0) + (newRet180 || 0);
-  const retention = totalClients > 0 ? Math.round(retained / totalClients * 100) : null;
+  const cols = parseRow(allStaffLine);
+  const existingTotal  = parseFloat(cols[1]);
+  const existingRet180 = parseFloat(cols[8]);
+  const newTotal       = parseFloat(cols[10]);
+  const newRet180      = parseFloat(cols[17]);
 
   console.log(`  [Retention] existing total=${existingTotal} ret180=${existingRet180}`);
   console.log(`  [Retention] new total=${newTotal} ret180=${newRet180}`);
-  console.log(`  [Retention] retention = ${retention}%`);
+
+  const totalClients = existingTotal + newTotal;
+  const retained     = existingRet180 + newRet180;
+  const retention = totalClients > 0 ? Math.round(retained / totalClients * 100) : null;
+  console.log(`  [Retention] = ${retained}/${totalClients} = ${retention}%`);
   return retention;
 }
 
@@ -392,7 +318,9 @@ async function scrapeAccount(browser, account) {
     locale:     'en-US',
     timezoneId: 'America/Los_Angeles',
   });
-  await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
   await context.addCookies(parseCookies(raw));
 
   const page = await context.newPage();
@@ -400,7 +328,9 @@ async function scrapeAccount(browser, account) {
 
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await settle(page, 5000);
-  if (page.url().includes('login')) throw new Error(`${account.cookieEnv} expired — refresh the secret`);
+  if (page.url().includes('login')) {
+    throw new Error(`${account.cookieEnv} expired — refresh the GitHub secret`);
+  }
   console.log(`Logged in: ${page.url()}`);
 
   const periods = [
@@ -415,16 +345,17 @@ async function scrapeAccount(browser, account) {
     const prefix = `${account.key}_${p.pickerLabel.replace(/\s/g, '_')}`;
     console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}") ──`);
 
-    const sales       = await fetchSales(page, base, p.pickerLabel, prefix);
-    const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix);
-    const retention   = await fetchRetention(page, base, p.pickerLabel, prefix);
+    const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
+    const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
+    const retention   = await fetchRetention(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
 
-    // Project end-of-month sales for current month
     const daysElapsed = p.isCurrent ? dayOfMonth() : null;
     const totalDays   = p.isCurrent ? daysInMonth(0) : null;
     const projectedSales = (p.isCurrent && sales !== null && daysElapsed > 0)
       ? Math.round((sales / daysElapsed) * totalDays)
       : null;
+
+    console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% ret=${retention}%`);
 
     results.push({
       label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent,
