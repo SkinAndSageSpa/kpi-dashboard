@@ -1,0 +1,55 @@
+name: Probe 4 — Text Content Dump
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Account to probe (waxon or skinsage)'
+        required: false
+        default: 'waxon'
+        type: choice
+        options: [waxon, skinsage, both]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROBE_DIR: /tmp/probe4-results
+      SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
+      WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run probe4 (waxon)
+        if: inputs.account == 'waxon' || inputs.account == 'both'
+        env:
+          PROBE_ACCOUNT: waxon
+          PROBE_DIR: /tmp/probe4-waxon
+        run: node src/probe4.js
+
+      - name: Run probe4 (skinsage)
+        if: inputs.account == 'skinsage' || inputs.account == 'both'
+        env:
+          PROBE_ACCOUNT: skinsage
+          PROBE_DIR: /tmp/probe4-skinsage
+        run: node src/probe4.js
+
+      - name: Upload probe4 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe4-results
+          path: /tmp/probe4-*/
+          retention-days: 7
