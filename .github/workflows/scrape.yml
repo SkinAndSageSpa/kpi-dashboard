@@ -32,11 +32,13 @@ jobs:
         run: node src/scraper.js
 
       - name: Upload dashboard
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kpi-dashboard
           path: dashboard.html
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Upload screenshots (on failure)
         if: failure()
