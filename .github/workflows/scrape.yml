@@ -48,8 +48,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data-cache.json
-          key: kpi-data-${{ steps.date.outputs.ym }}
-          restore-keys: kpi-data-
+          key: kpi-data-v2-${{ steps.date.outputs.ym }}
+          restore-keys: kpi-data-v2-
 
       - name: Scrape KPI data
         run: node src/scraper.js
