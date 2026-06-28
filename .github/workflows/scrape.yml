@@ -70,6 +70,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           cp dashboard.html /tmp/dashboard.html
+          rm -f dashboard.html
           git fetch origin
           if git show-ref --quiet refs/remotes/origin/dist; then
             git checkout dist
