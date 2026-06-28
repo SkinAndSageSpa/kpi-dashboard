@@ -286,6 +286,7 @@ function generateHtml({ businesses, generatedAt, errors }) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Business Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -346,11 +347,13 @@ header h1 {
   border: 1px solid #f0c0cc;
   border-radius: 8px;
   padding: 4px 11px;
-  text-decoration: none;
   letter-spacing: .03em;
+  cursor: pointer;
   transition: opacity .15s;
+  font-family: inherit;
 }
-.refresh-btn:hover { opacity: .75; }
+.refresh-btn:hover:not(:disabled) { opacity: .75; }
+.refresh-btn:disabled { opacity: .5; cursor: default; }
 
 .error-banner {
   margin-bottom: 8px;
@@ -503,7 +506,7 @@ footer {
   <h1>Business Dashboard</h1>
   <div class="header-right">
     <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
-    <a class="refresh-btn" href="https://github.com/SkinAndSageSpa/kpi-dashboard/actions/workflows/scrape.yml" target="_blank">↻ Refresh</a>
+    <button class="refresh-btn" onclick="triggerRefresh(this)">↻ Refresh</button>
   </div>
 </header>
 
@@ -516,6 +519,93 @@ ${panels}
 <footer>
   Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓
 </footer>
+
+<script>
+const REPO = 'SkinAndSageSpa/kpi-dashboard';
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function triggerRefresh(btn) {
+  let token = localStorage.getItem('gh_pat');
+  if (!token) {
+    token = prompt('Enter a GitHub Personal Access Token with Actions read/write scope.\\nIt will be saved locally for future refreshes.');
+    if (!token) return;
+    token = token.trim();
+    localStorage.setItem('gh_pat', token);
+  }
+
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' };
+  const orig = btn.textContent;
+  btn.disabled = true;
+
+  const setLabel = t => { btn.textContent = t; };
+
+  try {
+    setLabel('↻ Starting…');
+    const triggerTime = Date.now();
+
+    const trigRes = await fetch('https://api.github.com/repos/' + REPO + '/actions/workflows/scrape.yml/dispatches', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: 'master' })
+    });
+    if (!trigRes.ok) {
+      if (trigRes.status === 401) { localStorage.removeItem('gh_pat'); alert('Invalid token — please try again.'); }
+      else alert('Could not trigger run: HTTP ' + trigRes.status);
+      return;
+    }
+
+    // Wait a moment then locate the new run
+    await sleep(4000);
+    let runId = null;
+    for (let i = 0; i < 8 && !runId; i++) {
+      const r = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs?event=workflow_dispatch&per_page=5', { headers });
+      const runs = (await r.json()).workflow_runs || [];
+      const hit = runs.find(r => new Date(r.created_at).getTime() >= triggerTime - 5000);
+      if (hit) runId = hit.id;
+      else await sleep(3000);
+    }
+    if (!runId) { alert('Could not locate the triggered run. Check GitHub Actions.'); return; }
+
+    // Poll until complete
+    let minutes = 0;
+    for (;;) {
+      setLabel('↻ Running… (~' + Math.max(1, 8 - minutes) + ' min)');
+      await sleep(30000);
+      minutes += 0.5;
+      const r = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs/' + runId, { headers });
+      const run = await r.json();
+      if (run.status === 'completed') {
+        if (run.conclusion !== 'success') { alert('Run ended: ' + run.conclusion + '. Check GitHub Actions.'); return; }
+        break;
+      }
+    }
+
+    setLabel('↻ Downloading…');
+
+    // Fetch artifact zip
+    const artsRes = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs/' + runId + '/artifacts', { headers });
+    const art = ((await artsRes.json()).artifacts || []).find(a => a.name === 'kpi-dashboard');
+    if (!art) { alert('Dashboard artifact not found.'); return; }
+
+    const zipRes = await fetch('https://api.github.com/repos/' + REPO + '/actions/artifacts/' + art.id + '/zip', { headers });
+    if (!zipRes.ok) { alert('Could not download artifact: HTTP ' + zipRes.status); return; }
+
+    const buf = await zipRes.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    const html = await zip.file('dashboard.html').async('string');
+
+    document.open();
+    document.write(html);
+    document.close();
+
+  } catch(e) {
+    alert('Refresh failed: ' + e.message);
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+</script>
 
 </body>
 </html>`;
