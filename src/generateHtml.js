@@ -623,11 +623,12 @@ async function triggerRefresh(btn) {
     if (!runId) { alert('Could not locate the triggered run. Check GitHub Actions.'); return; }
 
     // Poll until complete
-    let minutes = 0;
+    let elapsed = 0;
     for (;;) {
-      setLabel('↻ Running… (~' + Math.max(1, 8 - minutes) + ' min)');
+      const m = Math.floor(elapsed / 60), s = elapsed % 60;
+      setLabel('↻ Running… ' + m + 'm ' + String(s).padStart(2, '0') + 's');
       await sleep(30000);
-      minutes += 0.5;
+      elapsed += 30;
       const r = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs/' + runId, { headers });
       const run = await r.json();
       if (run.status === 'completed') {
