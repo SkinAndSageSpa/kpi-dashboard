@@ -119,12 +119,14 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
 // Utilization bars (booked %) with a dot overlay marking available hours.
 // Dot is scaled independently (max available hrs across periods), so you can
 // see whether utilization shifted because of demand or because capacity changed.
+// Value labels sit below the month name (never inside bars).
 function utilizationChart(periods, health) {
-  const W = 280, H = 108;
+  const W = 280, H = 118;
   const barW = 72, gap = 13;
   const maxBarH = 58;
   const botY = 82;
-  const labY = 97;
+  const labY  = 97;
+  const subY  = 111;
 
   const allUtil  = periods.map(p => p?.utilization).filter(v => v !== null && v > 0);
   const maxUtil  = Math.max(...allUtil, 1);
@@ -161,10 +163,8 @@ function utilizationChart(periods, health) {
     if (avail !== null && avail > 0) {
       const dotH = Math.max(4, Math.round((avail / maxHours) * maxBarH));
       const dotY = botY - dotH;
-      out += `<circle cx="${cx}" cy="${dotY}" r="4.5" fill="#ffffff" stroke="#b09088" stroke-width="2"/>`;
-      if (isCur) {
-        out += `<text x="${(parseFloat(cx) + 9).toFixed(1)}" y="${(dotY + 3.5).toFixed(1)}" font-size="9" fill="#b09088" font-weight="600">${Math.round(avail)}h</text>`;
-      }
+      out += `<circle cx="${cx}" cy="${dotY}" r="6" fill="#ffffff" stroke="#6b5c58" stroke-width="2.5"/>`;
+      out += `<text x="${cx}" y="${subY}" text-anchor="middle" font-size="9" fill="#8a7470" font-weight="500">${Math.round(avail)}h</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
@@ -174,22 +174,23 @@ function utilizationChart(periods, health) {
   const legend = hasHours
     ? `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
       `<text x="66" y="11" font-size="8.5" fill="#b09088">Booked %</text>` +
-      `<circle cx="119" cy="7" r="4" fill="#ffffff" stroke="#b09088" stroke-width="1.5"/>` +
-      `<text x="127" y="11" font-size="8.5" fill="#b09088">Avail hrs</text>`
+      `<circle cx="119" cy="7" r="5" fill="#ffffff" stroke="#6b5c58" stroke-width="2"/>` +
+      `<text x="128" y="11" font-size="8.5" fill="#b09088">Avail hrs</text>`
     : '';
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
 
 // Single consolidated bar per month (combined retention) with a dot overlay
-// marking new-client retention. White circle with rose border sits at the
-// height corresponding to new%, so you can see how new clients compare.
+// marking new-client retention. Dot sits at the height corresponding to new%
+// so you can see how new clients compare. Value labels below month name.
 function retentionChart(periods, health) {
-  const W = 280, H = 108;
+  const W = 280, H = 118;
   const barW = 72, gap = 13;
   const maxBarH = 58;
   const botY = 82;
   const labY = 97;
+  const subY = 111;
 
   const allVals = periods.map(p => p?.retention).filter(v => v !== null && v > 0);
   const maxVal = Math.max(...allVals, 1);
@@ -212,37 +213,30 @@ function retentionChart(periods, health) {
     const barY = botY - barH;
 
     let out = '';
-    // Consolidated bar
     out += `<rect x="${x.toFixed(1)}" y="${barY}" width="${barW}" height="${barH}" rx="5" fill="${fill}"/>`;
 
-    // Combined % label above bar
     if (combined !== null && combined > 0) {
       const col = isCur ? '#3c2f2a' : '#b09088';
       const fw  = isCur ? '600' : '400';
       out += `<text x="${cx}" y="${barY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}">${Math.round(combined)}%</text>`;
     }
 
-    // Dot overlay at new-client retention height
     if (newPct !== null && newPct > 0) {
       const dotH = Math.max(4, Math.round((newPct / maxVal) * maxBarH));
       const dotY = botY - dotH;
-      out += `<circle cx="${cx}" cy="${dotY}" r="4.5" fill="#ffffff" stroke="#d4919d" stroke-width="2"/>`;
-      // New% label to the right of dot, current month only
-      if (isCur) {
-        out += `<text x="${(parseFloat(cx) + 9).toFixed(1)}" y="${(dotY + 3.5).toFixed(1)}" font-size="9" fill="#d4919d" font-weight="600">${Math.round(newPct)}%</text>`;
-      }
+      out += `<circle cx="${cx}" cy="${dotY}" r="6" fill="#ffffff" stroke="#c2546b" stroke-width="2.5"/>`;
+      out += `<text x="${cx}" y="${subY}" text-anchor="middle" font-size="9" fill="#c2546b" font-weight="500">${Math.round(newPct)}%</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
     return out;
   }).join('');
 
-  // Legend
   const legend =
     `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
     `<text x="66" y="11" font-size="8.5" fill="#b09088">Combined</text>` +
-    `<circle cx="119" cy="7" r="4" fill="#ffffff" stroke="#d4919d" stroke-width="1.5"/>` +
-    `<text x="127" y="11" font-size="8.5" fill="#b09088">New clients</text>`;
+    `<circle cx="119" cy="7" r="5" fill="#ffffff" stroke="#c2546b" stroke-width="2"/>` +
+    `<text x="128" y="11" font-size="8.5" fill="#b09088">New clients</text>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
