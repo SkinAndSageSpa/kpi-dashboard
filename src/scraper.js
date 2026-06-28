@@ -414,19 +414,17 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_ret_generated`);
 
-  // 60-day rolling window: anchor = today for current month, last day of month for prior
+  // 2 full calendar months: each bar = [month - 1] + [month].
+  // Current month always uses the 2 most recently completed months so partial-month
+  // data never skews the window (e.g. in June: April + May regardless of the day).
+  //   monthsAgo=0 (June):  Apr 1 → Jun 1
+  //   monthsAgo=1 (May):   Apr 1 → Jun 1  (same — June is partial)
+  //   monthsAgo=2 (April): Mar 1 → May 1
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
   const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  let startDate, endDate;
-  if (monthsAgo === 0) {
-    endDate   = new Date(now); endDate.setDate(endDate.getDate() + 1);   // tomorrow (exclusive)
-    startDate = new Date(now); startDate.setDate(startDate.getDate() - 60);
-  } else {
-    // last day of the target month = day 0 of the following month
-    const lastDay = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 0);
-    endDate   = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 1); // exclusive
-    startDate = new Date(lastDay); startDate.setDate(startDate.getDate() - 60);
-  }
+  const endMonthIdx = now.getMonth() - Math.max(0, monthsAgo - 1);
+  const endDate     = new Date(now.getFullYear(), endMonthIdx, 1);
+  const startDate   = new Date(now.getFullYear(), endMonthIdx - 2, 1);
 
   const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate)).catch(e => {
     console.warn('  [Retention 60d] error, falling back to single month:', e.message);
