@@ -34,14 +34,19 @@ const fs   = require('fs');
 const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
-const CACHE_FILE = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
+const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
+const CACHE_VERSION = 2; // bump when cached period schema changes
 
 function loadCache() {
-  try { return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); }
-  catch { return { businesses: {} }; }
+  try {
+    const c = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    if (c.version !== CACHE_VERSION) return { version: CACHE_VERSION, businesses: {} };
+    return c;
+  } catch { return { version: CACHE_VERSION, businesses: {} }; }
 }
 
 function saveCache(cache) {
+  cache.version = CACHE_VERSION;
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
 }
 
@@ -342,30 +347,42 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_util_generated`);
 
-  // For current month: re-fetch with today as the end date (true MTD)
+  // Always read the full-month frame first to capture availableHours reliably.
+  // For current month we then open a second page with tomorrow as the end date
+  // to get the true MTD utilization %, but keep availableHours from the frame.
+  const frameText = await getReportFrameText(page);
+  let frameAvail = null;
+  if (frameText) {
+    const frameLine = frameText.split('\n').find(l => l.startsWith('All Selected\t'));
+    if (frameLine) {
+      const fc = parseRow(frameLine);
+      frameAvail = parseFloat(fc[1]);
+      if (isNaN(frameAvail)) frameAvail = null;
+      console.log(`  [Utilization] frame Avail=${fc[1]}, Booked=${fc[2]}, %=${fc[3]}`);
+    }
+  }
+
   if (isCurrent) {
     const mtd = await fetchUtilizationMTD(page).catch(e => {
       console.warn('  [Util MTD] error, falling back to full month:', e.message);
       return null;
     });
-    if (mtd !== null) return mtd;
+    if (mtd !== null) {
+      return { utilization: mtd.utilization, availableHours: mtd.availableHours ?? frameAvail };
+    }
   }
 
-  const text = await getReportFrameText(page);
-  if (!text) return null;
-
-  const lines = text.split('\n');
-  const allSelectedLine = lines.find(l => l.startsWith('All Selected\t'));
+  if (!frameText) return null;
+  const allSelectedLine = frameText.split('\n').find(l => l.startsWith('All Selected\t'));
   if (!allSelectedLine) {
-    console.warn(`  [Utilization] "All Selected" row not found. Lines: ${lines.slice(0, 8).join(' | ')}`);
+    console.warn(`  [Utilization] "All Selected" row not found. Lines: ${frameText.split('\n').slice(0, 8).join(' | ')}`);
     return null;
   }
 
-  const cols  = parseRow(allSelectedLine);
-  const util  = parseFloat(cols[3]);
-  const avail = parseFloat(cols[1]);
+  const cols = parseRow(allSelectedLine);
+  const util = parseFloat(cols[3]);
   console.log(`  [Utilization] All Selected → Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
-  return isNaN(util) ? null : { utilization: util, availableHours: isNaN(avail) ? null : avail };
+  return isNaN(util) ? null : { utilization: util, availableHours: frameAvail };
 }
 
 /**
