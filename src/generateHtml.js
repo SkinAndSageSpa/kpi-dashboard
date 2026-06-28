@@ -653,7 +653,7 @@ async function triggerRefresh(btn) {
     const savedToken = localStorage.getItem('gh_pat');
     if (savedToken) {
       const injection = \`<script>try{localStorage.setItem('gh_pat',\${JSON.stringify(savedToken)})}catch(e){}<\/script>\`;
-      html = html.replace('</head>', injection + '\\n</head>');
+      html = html.replace('<' + '/head>', injection + '\\n<' + '/head>');
     }
 
     const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
