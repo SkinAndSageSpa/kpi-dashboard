@@ -362,7 +362,42 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
  * All Selected Staff\t370\t35\t9.46\t77\t20.81\t80\t21.62\t80\t21.62\t58\t4\t6.90\t10\t17.24\t10\t17.24\t10\t17.24
  *   cols[1]=370 (existing total), cols[8]=80 (existing ret180), cols[10]=58 (new total), cols[17]=10 (new ret180)
  */
-async function fetchRetention(page, base, monthOption, snapPrefix) {
+// After generating the single-month retention report (to capture iframe URL+settings),
+// open a second page with explicit start/end dates for a 60-day rolling window.
+// Anchor: today for current month, last day of month for completed months.
+async function fetchRetentionWindow(page, startStr, endExclusiveStr) {
+  const frame = page.frames().find(
+    f => f.url().includes('/api/v1/reports/') && f.url().includes('/html')
+  );
+  if (!frame) { console.warn('  [Retention 60d] iframe not found'); return null; }
+
+  let settings;
+  try {
+    const urlObj = new URL(frame.url());
+    settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
+  } catch(e) {
+    console.warn('  [Retention 60d] could not parse settings:', e.message);
+    return null;
+  }
+
+  settings.timePeriodStart         = startStr;
+  settings.timePeriodEndExclusive  = endExclusiveStr;
+
+  const urlObj2 = new URL(frame.url());
+  urlObj2.searchParams.set('settings', JSON.stringify(settings));
+  console.log(`  [Retention 60d] ${startStr} → ${endExclusiveStr}`);
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(urlObj2.toString(), { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    return await p.evaluate(() => document.body?.innerText || '');
+  } finally {
+    await p.close();
+  }
+}
+
+async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0) {
   console.log(`\n  [Retention] ${monthOption}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -379,7 +414,25 @@ async function fetchRetention(page, base, monthOption, snapPrefix) {
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_ret_generated`);
 
-  const text = await getReportFrameText(page);
+  // 60-day rolling window: anchor = today for current month, last day of month for prior
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  let startDate, endDate;
+  if (monthsAgo === 0) {
+    endDate   = new Date(now); endDate.setDate(endDate.getDate() + 1);   // tomorrow (exclusive)
+    startDate = new Date(now); startDate.setDate(startDate.getDate() - 60);
+  } else {
+    // last day of the target month = day 0 of the following month
+    const lastDay = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 0);
+    endDate   = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 1); // exclusive
+    startDate = new Date(lastDay); startDate.setDate(startDate.getDate() - 60);
+  }
+
+  const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate)).catch(e => {
+    console.warn('  [Retention 60d] error, falling back to single month:', e.message);
+    return null;
+  });
+  const text = windowText || await getReportFrameText(page);
   if (!text) return null;
 
   const lines = text.split('\n');
@@ -452,7 +505,7 @@ async function scrapeAccount(browser, account) {
 
     const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
     const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
-    const retResult   = await fetchRetention(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const retResult   = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
