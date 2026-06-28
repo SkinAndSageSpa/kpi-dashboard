@@ -346,7 +346,6 @@ function generateHtml({ businesses, generatedAt, errors }) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Business Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -644,17 +643,11 @@ async function triggerRefresh(btn) {
 
     setLabel('↻ Downloading…');
 
-    // Fetch artifact zip
-    const artsRes = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs/' + runId + '/artifacts', { headers });
-    const art = ((await artsRes.json()).artifacts || []).find(a => a.name === 'kpi-dashboard');
-    if (!art) { alert('Dashboard artifact not found.'); return; }
-
-    const zipRes = await fetch('https://api.github.com/repos/' + REPO + '/actions/artifacts/' + art.id + '/zip', { headers });
-    if (!zipRes.ok) { alert('Could not download artifact: HTTP ' + zipRes.status); return; }
-
-    const buf = await zipRes.arrayBuffer();
-    const zip = await JSZip.loadAsync(buf);
-    let html = await zip.file('dashboard.html').async('string');
+    // Fetch dashboard.html directly from the dist branch (no zip/redirect issues)
+    const rawUrl = 'https://raw.githubusercontent.com/' + REPO + '/dist/dashboard.html?t=' + Date.now();
+    const rawRes = await fetch(rawUrl);
+    if (!rawRes.ok) { alert('Could not fetch dashboard: HTTP ' + rawRes.status); return; }
+    let html = await rawRes.text();
 
     // Inject the saved token so it survives navigation to the blob URL
     const savedToken = localStorage.getItem('gh_pat');

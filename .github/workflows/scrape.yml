@@ -5,6 +5,9 @@ on:
     - cron: '0 14 * * *'   # 6am PT daily (UTC-8)
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -51,7 +54,7 @@ jobs:
       - name: Scrape KPI data
         run: node src/scraper.js
 
-      - name: Upload dashboard
+      - name: Upload dashboard artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -59,6 +62,23 @@ jobs:
           path: dashboard.html
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Push dashboard to dist branch
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin
+          if git ls-remote --exit-code origin dist; then
+            git worktree add /tmp/dist origin/dist
+          else
+            git worktree add --orphan /tmp/dist dist
+          fi
+          cp dashboard.html /tmp/dist/dashboard.html
+          cd /tmp/dist
+          git add dashboard.html
+          git diff --staged --quiet || git commit -m "Update dashboard $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git push origin HEAD:dist
 
       - name: Upload screenshots (on failure)
         if: failure()
