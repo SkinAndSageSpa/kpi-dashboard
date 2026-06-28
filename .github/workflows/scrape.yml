@@ -22,11 +22,31 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Get month key for cache
+        id: date
+        run: echo "ym=$(date -u +'%Y-%m')" >> $GITHUB_OUTPUT
+
+      - name: Cache node_modules and Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.cache/ms-playwright
+          key: deps-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: deps-${{ runner.os }}-
+
       - name: Install dependencies
         run: npm install
 
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
+
+      - name: Restore prior-month KPI data cache
+        uses: actions/cache@v4
+        with:
+          path: data-cache.json
+          key: kpi-data-${{ steps.date.outputs.ym }}
+          restore-keys: kpi-data-
 
       - name: Scrape KPI data
         run: node src/scraper.js

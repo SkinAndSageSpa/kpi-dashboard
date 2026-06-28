@@ -34,6 +34,23 @@ const fs   = require('fs');
 const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
+const CACHE_FILE = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
+
+function loadCache() {
+  try { return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); }
+  catch { return { businesses: {} }; }
+}
+
+function saveCache(cache) {
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
+}
+
+function periodKey(monthsAgo) {
+  const n = ptNow();
+  const d = new Date(n.getFullYear(), n.getMonth() - monthsAgo, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || '/tmp/kpi-screenshots';
 
 const ACCOUNTS = [
@@ -460,7 +477,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
 
 // ── Account scraper ───────────────────────────────────────────────────────────
 
-async function scrapeAccount(browser, account) {
+async function scrapeAccount(browser, account, cache) {
   const raw = process.env[account.cookieEnv];
   if (!raw) throw new Error(`${account.cookieEnv} not set`);
 
@@ -497,9 +514,18 @@ async function scrapeAccount(browser, account) {
 
   const results = [];
 
+  const bizCache = cache.businesses[account.key] || (cache.businesses[account.key] = { periods: {} });
+
   for (const p of periods) {
+    const key    = periodKey(p.monthsAgo);
     const prefix = `${account.key}_${p.pickerLabel.replace(/\s/g, '_')}`;
     console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}") ──`);
+
+    if (!p.isCurrent && bizCache.periods[key]) {
+      console.log(`  Using cached data for ${key}`);
+      results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: false, ...bizCache.periods[key] });
+      continue;
+    }
 
     const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
     const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
@@ -516,10 +542,10 @@ async function scrapeAccount(browser, account) {
 
     console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% ret=${retention}%`);
 
-    results.push({
-      label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent,
-      sales, projectedSales, utilization, retention, existingRetPct, newRetPct,
-    });
+    const periodData = { sales, projectedSales, utilization, retention, existingRetPct, newRetPct };
+    if (!p.isCurrent) bizCache.periods[key] = periodData;
+
+    results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
   }
 
   await context.close();
@@ -537,13 +563,14 @@ async function main() {
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
   });
 
+  const cache = loadCache();
   const businessData = [];
   const errors = [];
 
   try {
     for (const account of ACCOUNTS) {
       try {
-        businessData.push(await scrapeAccount(browser, account));
+        businessData.push(await scrapeAccount(browser, account, cache));
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
@@ -559,6 +586,8 @@ async function main() {
   } finally {
     await browser.close();
   }
+
+  saveCache(cache);
 
   const html = generateHtml({
     businesses: businessData, generatedAt: new Date().toISOString(), errors,
