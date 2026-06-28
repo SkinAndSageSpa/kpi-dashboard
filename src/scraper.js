@@ -450,17 +450,16 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_ret_generated`);
 
-  // 2 full calendar months: each bar = [month - 1] + [month].
-  // Current month always uses the 2 most recently completed months so partial-month
-  // data never skews the window (e.g. in June: April + May regardless of the day).
-  //   monthsAgo=0 (June):  Apr 1 → Jun 1
-  //   monthsAgo=1 (May):   Apr 1 → Jun 1  (same — June is partial)
-  //   monthsAgo=2 (April): Mar 1 → May 1
+  // Window: quarter-start → first of month after target period.
+  //   monthsAgo=0 (June):  Apr 1 → Jul 1
+  //   monthsAgo=1 (May):   Apr 1 → Jun 1
+  //   monthsAgo=2 (April): Apr 1 → May 1
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
   const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const endMonthIdx = now.getMonth() - Math.max(0, monthsAgo - 1);
-  const endDate     = new Date(now.getFullYear(), endMonthIdx, 1);
-  const startDate   = new Date(now.getFullYear(), endMonthIdx - 2, 1);
+  const targetDate        = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
+  const quarterStartMonth = Math.floor(targetDate.getMonth() / 3) * 3;
+  const startDate         = new Date(targetDate.getFullYear(), quarterStartMonth, 1);
+  const endDate           = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
 
   const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate)).catch(e => {
     console.warn('  [Retention 60d] error, falling back to single month:', e.message);
