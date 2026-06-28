@@ -617,14 +617,14 @@ async function triggerRefresh(btn) {
     }
 
     // Wait a moment then locate the new run
-    await sleep(4000);
+    await sleep(6000);
     let runId = null;
-    for (let i = 0; i < 8 && !runId; i++) {
-      const r = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs?event=workflow_dispatch&per_page=5', { headers });
+    for (let i = 0; i < 20 && !runId; i++) {
+      const r = await fetch('https://api.github.com/repos/' + REPO + '/actions/runs?event=workflow_dispatch&per_page=10', { headers });
       const runs = (await r.json()).workflow_runs || [];
-      const hit = runs.find(r => new Date(r.created_at).getTime() >= triggerTime - 5000);
+      const hit = runs.find(r => new Date(r.created_at).getTime() >= triggerTime - 15000);
       if (hit) runId = hit.id;
-      else await sleep(3000);
+      else await sleep(4000);
     }
     if (!runId) { alert('Could not locate the triggered run. Check GitHub Actions.'); return; }
 
