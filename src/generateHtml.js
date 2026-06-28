@@ -116,23 +116,16 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
-// Utilization bars (booked %) with a dot overlay marking available hours.
-// Dot is scaled independently (max available hrs across periods), so you can
-// see whether utilization shifted because of demand or because capacity changed.
-// Value labels sit below the month name (never inside bars).
+// Utilization bars (booked %). Available hours stamped as text inside each bar.
 function utilizationChart(periods, health) {
-  const W = 280, H = 118;
+  const W = 280, H = 100;
   const barW = 72, gap = 13;
-  const maxBarH = 58;
-  const botY = 82;
-  const labY  = 97;
-  const subY  = 111;
+  const maxBarH = 64;
+  const botY = 80;
+  const labY = 95;
 
-  const allUtil  = periods.map(p => p?.utilization).filter(v => v !== null && v > 0);
-  const maxUtil  = Math.max(...allUtil, 1);
-  const allHours = periods.map(p => p?.availableHours).filter(v => v !== null && v > 0);
-  const maxHours = Math.max(...allHours, 1);
-  const hasHours = allHours.length > 0;
+  const allUtil = periods.map(p => p?.utilization).filter(v => v !== null && v > 0);
+  const maxUtil = Math.max(...allUtil, 1);
 
   const startX = (W - 3 * barW - 2 * gap) / 2;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
@@ -160,37 +153,26 @@ function utilizationChart(periods, health) {
       out += `<text x="${cx}" y="${barY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}">${util.toFixed(1)}%</text>`;
     }
 
-    if (avail !== null && avail > 0) {
-      const dotH = Math.max(4, Math.round((avail / maxHours) * maxBarH));
-      const dotY = botY - dotH;
-      out += `<circle cx="${cx}" cy="${dotY}" r="6" fill="#ffffff" stroke="#6b5c58" stroke-width="2.5"/>`;
-      out += `<text x="${cx}" y="${subY}" text-anchor="middle" font-size="9" fill="#8a7470" font-weight="500">${Math.round(avail)}h</text>`;
+    if (avail !== null && avail > 0 && barH >= 18) {
+      const innerY = Math.round(barY + barH * 0.62 + 5);
+      const col = isCur ? 'rgba(255,255,255,0.88)' : '#b09088';
+      out += `<text x="${cx}" y="${innerY}" text-anchor="middle" font-size="10" fill="${col}" font-weight="500">${Math.round(avail)}h</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
     return out;
   }).join('');
 
-  const legend = hasHours
-    ? `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
-      `<text x="66" y="11" font-size="8.5" fill="#b09088">Booked %</text>` +
-      `<circle cx="119" cy="7" r="5" fill="#ffffff" stroke="#6b5c58" stroke-width="2"/>` +
-      `<text x="128" y="11" font-size="8.5" fill="#b09088">Avail hrs</text>`
-    : '';
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
-// Single consolidated bar per month (combined retention) with a dot overlay
-// marking new-client retention. Dot sits at the height corresponding to new%
-// so you can see how new clients compare. Value labels below month name.
+// Retention bars (combined%). New-client % stamped as text inside each bar.
 function retentionChart(periods, health) {
-  const W = 280, H = 118;
+  const W = 280, H = 100;
   const barW = 72, gap = 13;
-  const maxBarH = 58;
-  const botY = 82;
-  const labY = 97;
-  const subY = 111;
+  const maxBarH = 64;
+  const botY = 80;
+  const labY = 95;
 
   const allVals = periods.map(p => p?.retention).filter(v => v !== null && v > 0);
   const maxVal = Math.max(...allVals, 1);
@@ -221,24 +203,17 @@ function retentionChart(periods, health) {
       out += `<text x="${cx}" y="${barY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}">${Math.round(combined)}%</text>`;
     }
 
-    if (newPct !== null && newPct > 0) {
-      const dotH = Math.max(4, Math.round((newPct / maxVal) * maxBarH));
-      const dotY = botY - dotH;
-      out += `<circle cx="${cx}" cy="${dotY}" r="6" fill="#ffffff" stroke="#c2546b" stroke-width="2.5"/>`;
-      out += `<text x="${cx}" y="${subY}" text-anchor="middle" font-size="9" fill="#c2546b" font-weight="500">${Math.round(newPct)}%</text>`;
+    if (newPct !== null && newPct > 0 && barH >= 18) {
+      const innerY = Math.round(barY + barH * 0.62 + 5);
+      const col = isCur ? 'rgba(255,255,255,0.88)' : '#c8a0a8';
+      out += `<text x="${cx}" y="${innerY}" text-anchor="middle" font-size="10" fill="${col}" font-weight="500">${Math.round(newPct)}% new</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
     return out;
   }).join('');
 
-  const legend =
-    `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
-    `<text x="66" y="11" font-size="8.5" fill="#b09088">Combined</text>` +
-    `<circle cx="119" cy="7" r="5" fill="#ffffff" stroke="#c2546b" stroke-width="2"/>` +
-    `<text x="128" y="11" font-size="8.5" fill="#b09088">New clients</text>`;
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
 function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false }) {
@@ -572,7 +547,7 @@ ${panels}
 </div>
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked % (MTD) with available hrs inside bar &nbsp;·&nbsp; Retention = 180-day combined with new-client % inside bar &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓
 </footer>
 
 <script>
