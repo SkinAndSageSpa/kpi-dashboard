@@ -316,9 +316,10 @@ async function fetchUtilizationMTD(page) {
     const allRow = text.split('\n').find(l => l.startsWith('All Selected\t'));
     if (!allRow) { console.warn('  [Util MTD] All Selected row not found'); return null; }
     const cols = allRow.split('\t').map(s => s.trim());
-    const util = parseFloat(cols[3]);
+    const util  = parseFloat(cols[3]);
+    const avail = parseFloat(cols[1]);
     console.log(`  [Util MTD] Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
-    return isNaN(util) ? null : util;
+    return isNaN(util) ? null : { utilization: util, availableHours: isNaN(avail) ? null : avail };
   } finally {
     await p.close();
   }
@@ -360,10 +361,11 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     return null;
   }
 
-  const cols = parseRow(allSelectedLine);
-  const util = parseFloat(cols[3]);
+  const cols  = parseRow(allSelectedLine);
+  const util  = parseFloat(cols[3]);
+  const avail = parseFloat(cols[1]);
   console.log(`  [Utilization] All Selected → Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
-  return isNaN(util) ? null : util;
+  return isNaN(util) ? null : { utilization: util, availableHours: isNaN(avail) ? null : avail };
 }
 
 /**
@@ -527,9 +529,11 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales       = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
-    const utilization = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
-    const retResult   = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const sales      = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
+    const utilResult = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
+    const utilization    = utilResult?.utilization ?? null;
+    const availableHours = utilResult?.availableHours ?? null;
+    const retResult      = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
@@ -542,7 +546,7 @@ async function scrapeAccount(browser, account, cache) {
 
     console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% ret=${retention}%`);
 
-    const periodData = { sales, projectedSales, utilization, retention, existingRetPct, newRetPct };
+    const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct };
     if (!p.isCurrent) bizCache.periods[key] = periodData;
 
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });

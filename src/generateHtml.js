@@ -116,6 +116,71 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${els}</svg>`;
 }
 
+// Utilization bars (booked %) with a dot overlay marking available hours.
+// Dot is scaled independently (max available hrs across periods), so you can
+// see whether utilization shifted because of demand or because capacity changed.
+function utilizationChart(periods, health) {
+  const W = 280, H = 108;
+  const barW = 72, gap = 13;
+  const maxBarH = 58;
+  const botY = 82;
+  const labY = 97;
+
+  const allUtil  = periods.map(p => p?.utilization).filter(v => v !== null && v > 0);
+  const maxUtil  = Math.max(...allUtil, 1);
+  const allHours = periods.map(p => p?.availableHours).filter(v => v !== null && v > 0);
+  const maxHours = Math.max(...allHours, 1);
+  const hasHours = allHours.length > 0;
+
+  const startX = (W - 3 * barW - 2 * gap) / 2;
+  const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
+
+  const els = periods.map((p, i) => {
+    const pos = (periods.length - 1) - i;
+    const x  = startX + pos * (barW + gap);
+    const cx = (x + barW / 2).toFixed(1);
+    const isCur = i === 0;
+
+    const util  = p?.utilization    ?? null;
+    const avail = p?.availableHours ?? null;
+
+    const fill = isCur ? curFill : '#e8ddd9';
+    const barH = (util !== null && util > 0)
+      ? Math.max(6, Math.round((util / maxUtil) * maxBarH)) : 5;
+    const barY = botY - barH;
+
+    let out = '';
+    out += `<rect x="${x.toFixed(1)}" y="${barY}" width="${barW}" height="${barH}" rx="5" fill="${fill}"/>`;
+
+    if (util !== null && util > 0) {
+      const col = isCur ? '#3c2f2a' : '#b09088';
+      const fw  = isCur ? '600' : '400';
+      out += `<text x="${cx}" y="${barY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}">${util.toFixed(1)}%</text>`;
+    }
+
+    if (avail !== null && avail > 0) {
+      const dotH = Math.max(4, Math.round((avail / maxHours) * maxBarH));
+      const dotY = botY - dotH;
+      out += `<circle cx="${cx}" cy="${dotY}" r="4.5" fill="#ffffff" stroke="#b09088" stroke-width="2"/>`;
+      if (isCur) {
+        out += `<text x="${(parseFloat(cx) + 9).toFixed(1)}" y="${(dotY + 3.5).toFixed(1)}" font-size="9" fill="#b09088" font-weight="600">${Math.round(avail)}h</text>`;
+      }
+    }
+
+    out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
+    return out;
+  }).join('');
+
+  const legend = hasHours
+    ? `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
+      `<text x="66" y="11" font-size="8.5" fill="#b09088">Booked %</text>` +
+      `<circle cx="119" cy="7" r="4" fill="#ffffff" stroke="#b09088" stroke-width="1.5"/>` +
+      `<text x="127" y="11" font-size="8.5" fill="#b09088">Avail hrs</text>`
+    : '';
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
+}
+
 // Single consolidated bar per month (combined retention) with a dot overlay
 // marking new-client retention. White circle with rose border sits at the
 // height corresponding to new%, so you can see how new clients compare.
@@ -233,11 +298,7 @@ function businessPanel(biz) {
     label: 'Utilization',
     health: uh,
     currentDisplay: fmtPct(cur?.utilization),
-    chart: bigChart(
-      [cur?.utilization, m1?.utilization, m2?.utilization].map(v => v ?? null),
-      pLabels, uh,
-      v => v.toFixed(1) + '%'
-    ),
+    chart: utilizationChart([cur, m1, m2], uh),
     projRow: '',
     mtd: true,
   });
