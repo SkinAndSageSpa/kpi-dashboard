@@ -120,10 +120,11 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
 // Dot Y axis uses 55% of bar height max so dots sit in the lower bar area,
 // clear of the booked-% label at the top.
 function utilizationChart(periods, health) {
-  const W = 280, H = 108;
+  const W = 330, H = 108;
+  const legendW = 68;
   const barW = 72, gap = 13;
   const maxBarH = 58;
-  const dotMaxH = Math.round(maxBarH * 0.55); // dots occupy lower portion only
+  const dotMaxH = Math.round(maxBarH * 0.55);
   const botY = 82;
   const labY = 97;
 
@@ -133,7 +134,7 @@ function utilizationChart(periods, health) {
   const maxHours = Math.max(...allHours, 1);
   const hasHours = allHours.length > 0;
 
-  const startX = (W - 3 * barW - 2 * gap) / 2;
+  const startX = legendW + Math.round((W - legendW - 3 * barW - 2 * gap) / 2);
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = periods.map((p, i) => {
@@ -172,10 +173,10 @@ function utilizationChart(periods, health) {
   }).join('');
 
   const legend = hasHours
-    ? `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
-      `<text x="66" y="11" font-size="8.5" fill="#b09088">Booked %</text>` +
-      `<circle cx="121" cy="7" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
-      `<text x="130" y="11" font-size="8.5" fill="#b09088">Avail hrs</text>`
+    ? `<rect x="4" y="36" width="8" height="8" rx="2" fill="${curFill}"/>` +
+      `<text x="16" y="44" font-size="8.5" fill="#b09088">Booked %</text>` +
+      `<circle cx="8" cy="56" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
+      `<text x="16" y="60" font-size="8.5" fill="#b09088">Avail hrs</text>`
     : '';
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
@@ -185,7 +186,8 @@ function utilizationChart(periods, health) {
 // Dot Y axis uses 55% of bar height max so dots sit in lower bar area,
 // clear of the combined-% label at the top.
 function retentionChart(periods, health) {
-  const W = 280, H = 108;
+  const W = 330, H = 108;
+  const legendW = 68;
   const barW = 72, gap = 13;
   const maxBarH = 58;
   const dotMaxH = Math.round(maxBarH * 0.55);
@@ -197,7 +199,7 @@ function retentionChart(periods, health) {
   const allNew   = periods.map(p => p?.newRetPct).filter(v => v !== null && v > 0);
   const maxNew   = Math.max(...allNew, 1);
 
-  const startX = (W - 3 * barW - 2 * gap) / 2;
+  const startX = legendW + Math.round((W - legendW - 3 * barW - 2 * gap) / 2);
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = periods.map((p, i) => {
@@ -236,10 +238,10 @@ function retentionChart(periods, health) {
   }).join('');
 
   const legend =
-    `<rect x="54" y="3" width="8" height="8" rx="2" fill="${curFill}"/>` +
-    `<text x="66" y="11" font-size="8.5" fill="#b09088">Combined</text>` +
-    `<circle cx="121" cy="7" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
-    `<text x="130" y="11" font-size="8.5" fill="#b09088">New clients</text>`;
+    `<rect x="4" y="36" width="8" height="8" rx="2" fill="${curFill}"/>` +
+    `<text x="16" y="44" font-size="8.5" fill="#b09088">Combined</text>` +
+    `<circle cx="8" cy="56" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
+    `<text x="16" y="60" font-size="8.5" fill="#b09088">New clients</text>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
