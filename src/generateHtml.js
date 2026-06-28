@@ -652,11 +652,17 @@ async function triggerRefresh(btn) {
 
     const buf = await zipRes.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
-    const html = await zip.file('dashboard.html').async('string');
+    let html = await zip.file('dashboard.html').async('string');
 
-    document.open();
-    document.write(html);
-    document.close();
+    // Inject the saved token so it survives navigation to the blob URL
+    const savedToken = localStorage.getItem('gh_pat');
+    if (savedToken) {
+      const injection = \`<script>try{localStorage.setItem('gh_pat',\${JSON.stringify(savedToken)})}catch(e){}<\/script>\`;
+      html = html.replace('</head>', injection + '\\n</head>');
+    }
+
+    const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+    window.location.replace(URL.createObjectURL(blob));
 
   } catch(e) {
     alert('Refresh failed: ' + e.message);
