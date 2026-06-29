@@ -332,7 +332,84 @@ function businessPanel(biz) {
     </div>`;
 }
 
-function generateHtml({ businesses, generatedAt, errors }) {
+function comingSoonPanel(label) {
+  return `
+    <div class="loc-panel">
+      <div class="biz-header">
+        <div class="biz-name">${label}</div>
+      </div>
+      <div class="placeholder-body">Opening soon</div>
+    </div>`;
+}
+
+function locationPanel(loc) {
+  if (loc.error) {
+    return `
+      <div class="loc-panel error-panel">
+        <div class="biz-header"><div class="biz-name">${loc.label}</div></div>
+        <div class="error-body">Cookies expired — refresh the GitHub secret to restore data.</div>
+      </div>`;
+  }
+
+  const [cur, m1, m2] = loc.periods;
+  const pLabels = [cur?.label, m1?.label, m2?.label];
+
+  const sh = trendHealthSales(cur?.projectedSales, m1?.sales);
+  const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
+    ? cur.projectedSales - cur.sales : null;
+  const salesCard = kpiCard({
+    label: 'Sales', health: sh, currentDisplay: fmt$(cur?.sales),
+    chart: bigChart([cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null), pLabels, sh,
+      v => '$' + (v >= 1000 ? Math.round(v / 1000) + 'k' : Math.round(v)), projectedTop),
+  });
+
+  const uh = trendHealthPp(cur?.utilization, m1?.utilization);
+  const utilCard = kpiCard({
+    label: 'Utilization', health: uh, currentDisplay: fmtPct(cur?.utilization),
+    chart: utilizationChart([cur, m1, m2], uh), mtd: true,
+  });
+
+  const rh = trendHealthPp(cur?.retention, m1?.retention);
+  const retCard = kpiCard({
+    label: 'Retention', health: rh, currentDisplay: fmtPct(cur?.retention),
+    chart: retentionChart([cur, m1, m2], rh),
+  });
+
+  const signals = [sh, uh, rh].filter(h => h !== 'neutral');
+  const overall = signals.includes('red') ? 'red' : signals.includes('amber') ? 'amber'
+    : signals.length > 0 ? 'green' : 'neutral';
+  const pill = { green: 'Thriving', amber: 'Watch', red: 'Needs Love', neutral: 'No Data' };
+
+  return `
+    <div class="loc-panel">
+      <div class="biz-header">
+        <div class="biz-name">${loc.label}</div>
+        <div class="health-pill ${overall}">${pill[overall]}</div>
+      </div>
+      <div class="cards">
+        ${salesCard}
+        ${utilCard}
+        ${retCard}
+      </div>
+    </div>`;
+}
+
+function locationsSection(locations) {
+  const byKey = Object.fromEntries(locations.map(l => [l.key, l]));
+  const columns = [
+    { key: 'skinsage_ravenna',   render: () => locationPanel(byKey['skinsage_ravenna']   || { label: 'S&S Ravenna',    error: 'No data' }) },
+    { key: 'ss_coming_soon',     render: () => comingSoonPanel('Skin &amp; Sage') },
+    { key: 'waxon_belltown',     render: () => locationPanel(byKey['waxon_belltown']     || { label: 'WAXON Belltown',   error: 'No data' }) },
+    { key: 'waxon_capitol_hill', render: () => locationPanel(byKey['waxon_capitol_hill'] || { label: 'WAXON Capitol Hill', error: 'No data' }) },
+  ];
+  return `
+<div class="section-divider"><h2>By Location</h2></div>
+<div class="locations-grid">
+${columns.map(c => c.render()).join('\n')}
+</div>`;
+}
+
+function generateHtml({ businesses, locations = [], generatedAt, errors }) {
   const panels = businesses.map(businessPanel).join('\n');
 
   const errorBanner = errors.length > 0
@@ -372,11 +449,11 @@ body {
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
-  padding: 14px 18px 10px;
+  padding: 14px 18px 14px;
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
+  overflow-y: auto;
 }
 
 header {
@@ -429,8 +506,65 @@ header h1 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
+  height: calc(100vh - 130px);
+  min-height: 320px;
+}
+
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.section-divider h2 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.section-divider::after {
+  content: '';
   flex: 1;
-  min-height: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.locations-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.loc-panel {
+  background: var(--surface);
+  border-radius: var(--r);
+  box-shadow: 0 1px 8px rgba(60,30,24,.07), 0 0 0 1px var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.loc-panel .biz-name { font-size: 13px; }
+.loc-panel .kpi-value { font-size: 19px; }
+.loc-panel .kpi-chart { min-height: 52px; }
+
+.placeholder-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  text-align: center;
+  padding: 24px 16px;
+  line-height: 1.7;
 }
 
 .biz-panel {
@@ -574,6 +708,8 @@ ${errorBanner}
 <div class="dashboard">
 ${panels}
 </div>
+
+${locationsSection(locations)}
 
 <footer>
   Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓

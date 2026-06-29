@@ -63,6 +63,13 @@ const ACCOUNTS = [
   { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES'    },
 ];
 
+// Per-location scrapes: same flow + one extra location-filter step.
+const LOCATION_ACCOUNTS = [
+  { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna'      },
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',      locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown'     },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',  locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill' },
+];
+
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
 function ptNow() {
@@ -236,6 +243,38 @@ function parseRow(line) {
   return line.split('\t').map(s => s.trim());
 }
 
+// ── Location picker ──────────────────────────────────────────────────────────
+// The location dropdown appears in each report's settings panel after clicking
+// the report type. Trigger text is typically "All Locations" or the location name.
+
+async function selectLocation(page, locationName, snapPrefix) {
+  if (!locationName) return;
+  console.log(`  Selecting location: "${locationName}"`);
+  await dismissOverlays(page);
+
+  if (snapPrefix) await snap(page, `${snapPrefix}_before_loc`);
+
+  const LOC_TRIGGER_RE = /All Locations|Belltown|Capitol Hill|Ravenna/i;
+  const trigger = page.getByText(LOC_TRIGGER_RE, { exact: false }).first();
+  if (!await trigger.isVisible({ timeout: 4000 }).catch(() => false)) {
+    console.warn(`  [Location] trigger not found — skipping filter (will use default/all)`);
+    return;
+  }
+  await trigger.click();
+  await page.waitForTimeout(1200);
+
+  const option = page.getByText(locationName, { exact: true });
+  if (await option.count().catch(() => 0) === 0) {
+    console.warn(`  [Location] option "${locationName}" not found in dropdown`);
+    await page.keyboard.press('Escape');
+    return;
+  }
+  await option.last().click();
+  await page.waitForTimeout(1200);
+  console.log(`  [Location] set to "${locationName}"`);
+  if (snapPrefix) await snap(page, `${snapPrefix}_after_loc`);
+}
+
 // ── Report fetchers ───────────────────────────────────────────────────────────
 
 /**
@@ -248,8 +287,8 @@ function parseRow(line) {
  * "Total" line example:
  * Total\t412\t544\t$30,180.50\t23\t$308.00\t$30,488.50\t$32.56\t$5,760.81\t$36,281.87\t$0.00\t$36,281.87
  */
-async function fetchSales(page, base, monthOption, snapPrefix) {
-  console.log(`\n  [Sales] ${monthOption}`);
+async function fetchSales(page, base, monthOption, snapPrefix, location = null) {
+  console.log(`\n  [Sales] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
@@ -260,6 +299,7 @@ async function fetchSales(page, base, monthOption, snapPrefix) {
 
   await selectPeriod(page, monthOption, `${snapPrefix}_sales`);
   await settle(page, 1000);
+  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_sales` : null);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -330,8 +370,8 @@ async function fetchUtilizationMTD(page) {
   }
 }
 
-async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false) {
-  console.log(`\n  [Utilization] ${monthOption}`);
+async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null) {
+  console.log(`\n  [Utilization] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
@@ -342,6 +382,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
 
   await selectPeriod(page, monthOption, `${snapPrefix}_util`);
   await settle(page, 1000);
+  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_util` : null);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -433,8 +474,8 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr) {
   }
 }
 
-async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0) {
-  console.log(`\n  [Retention] ${monthOption}`);
+async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null) {
+  console.log(`\n  [Retention] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
   await settle(page, 3000);
@@ -445,6 +486,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
 
   await selectPeriod(page, monthOption, `${snapPrefix}_ret`);
   await settle(page, 1000);
+  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_ret` : null);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -532,12 +574,14 @@ async function scrapeAccount(browser, account, cache) {
 
   const results = [];
 
-  const bizCache = cache.businesses[account.key] || (cache.businesses[account.key] = { periods: {} });
+  const cacheKey = account.locationKey || account.key;
+  const location = account.location || null;
+  const bizCache = cache.businesses[cacheKey] || (cache.businesses[cacheKey] = { periods: {} });
 
   for (const p of periods) {
     const key    = periodKey(p.monthsAgo);
-    const prefix = `${account.key}_${p.pickerLabel.replace(/\s/g, '_')}`;
-    console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}") ──`);
+    const prefix = `${cacheKey}_${p.pickerLabel.replace(/\s/g, '_')}`;
+    console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}")${location ? ` [${location}]` : ''} ──`);
 
     if (!p.isCurrent && bizCache.periods[key]) {
       console.log(`  Using cached data for ${key}`);
@@ -545,11 +589,11 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await fetchSales(page, base, p.pickerLabel, prefix).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
-    const utilResult = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
+    const sales      = await fetchSales(page, base, p.pickerLabel, prefix, location).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
+    const utilResult = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
-    const retResult      = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const retResult      = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
@@ -569,7 +613,7 @@ async function scrapeAccount(browser, account, cache) {
   }
 
   await context.close();
-  return { key: account.key, label: account.label, periods: results };
+  return { key: cacheKey, label: account.label, periods: results };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -584,8 +628,14 @@ async function main() {
   });
 
   const cache = loadCache();
-  const businessData = [];
+  const businessData  = [];
+  const locationData  = [];
   const errors = [];
+
+  const nullPeriods = () => [0, 1, 2].map(monthsAgo => ({
+    label: monthLabel(monthsAgo), monthsAgo, isCurrent: monthsAgo === 0,
+    sales: null, projectedSales: null, utilization: null, retention: null,
+  }));
 
   try {
     for (const account of ACCOUNTS) {
@@ -594,13 +644,17 @@ async function main() {
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
-        businessData.push({
-          key: account.key, label: account.label, error: err.message,
-          periods: [0, 1, 2].map(monthsAgo => ({
-            label: monthLabel(monthsAgo), monthsAgo, isCurrent: monthsAgo === 0,
-            sales: null, projectedSales: null, utilization: null, retention: null,
-          })),
-        });
+        businessData.push({ key: account.key, label: account.label, error: err.message, periods: nullPeriods() });
+      }
+    }
+
+    for (const account of LOCATION_ACCOUNTS) {
+      try {
+        locationData.push(await scrapeAccount(browser, account, cache));
+      } catch (err) {
+        console.error(`ERROR scraping ${account.label}: ${err.message}`);
+        errors.push({ account: account.label, error: err.message });
+        locationData.push({ key: account.locationKey, label: account.label, error: err.message, periods: nullPeriods() });
       }
     }
   } finally {
@@ -610,7 +664,7 @@ async function main() {
   saveCache(cache);
 
   const html = generateHtml({
-    businesses: businessData, generatedAt: new Date().toISOString(), errors,
+    businesses: businessData, locations: locationData, generatedAt: new Date().toISOString(), errors,
   });
 
   const outFile = process.env.DASHBOARD_OUT || path.join(__dirname, '..', 'dashboard.html');
