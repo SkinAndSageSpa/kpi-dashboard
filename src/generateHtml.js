@@ -666,10 +666,11 @@ header h1 {
   min-height: 0;
   display: flex;
   align-items: flex-end;
+  justify-content: center;
   overflow: visible;
   padding-top: 6px;
 }
-.kpi-chart svg { width: 100%; height: 100%; min-height: 100px; }
+.kpi-chart svg { width: 100%; max-width: 380px; height: 100%; min-height: 90px; }
 
 .mtd-tag {
   font-family: var(--sans);
