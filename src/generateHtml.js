@@ -296,6 +296,7 @@ function businessPanel(biz) {
       projectedTop
     ),
     projRow: '',
+    mtd: true,
   });
 
   const uh = trendHealthPp(cur?.utilization, m1?.utilization);
@@ -315,6 +316,7 @@ function businessPanel(biz) {
     currentDisplay: fmtPct(cur?.retention),
     chart: retentionChart(periods, rh),
     projRow: '',
+    mtd: true,
   });
 
   const signals = [sh, uh, rh].filter(h => h !== 'neutral');
@@ -367,6 +369,7 @@ function locationPanel(loc) {
     label: 'Sales', health: sh, currentDisplay: fmt$(cur?.sales),
     chart: bigChart([cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null), pLabels, sh,
       v => '$' + (v >= 1000 ? Math.round(v / 1000) + 'k' : Math.round(v)), projectedTop),
+    mtd: true,
   });
 
   const uh = trendHealthPp(cur?.utilization, m1?.utilization);
@@ -379,6 +382,7 @@ function locationPanel(loc) {
   const retCard = kpiCard({
     label: 'Retention', health: rh, currentDisplay: fmtPct(cur?.retention),
     chart: retentionChart([cur, m1, m2], rh),
+    mtd: true,
   });
 
   const signals = [sh, uh, rh].filter(h => h !== 'neutral');
