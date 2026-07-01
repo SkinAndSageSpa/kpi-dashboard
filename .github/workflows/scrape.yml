@@ -1,8 +1,6 @@
 name: Generate KPI Dashboard
 
 on:
-  schedule:
-    - cron: '0 14 * * *'   # 6am PT daily (UTC-8)
   workflow_dispatch:
 
 permissions:
