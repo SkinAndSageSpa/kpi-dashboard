@@ -60,8 +60,10 @@ const HEALTH_FILL = {
 // Full-width 3-bar chart. Oldest month left, current month right.
 // projectedTop: extra height to stack on the current bar (projected - actual sales).
 function bigChart(values, labels, health, fmtBar, projectedTop = null) {
-  const W = 280, H = 100;
-  const barW = 72, gap = 13;
+  const n = values.length;
+  const pad = 8;
+  const barW = 46, gap = 12;
+  const W = n * barW + (n - 1) * gap + pad * 2, H = 100;
   const maxBarH = 64;
   const botY = 80;
   const labY = 95;
@@ -73,7 +75,7 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   }
   const maxVal = Math.max(...allVals, 1);
 
-  const startX = (W - 3 * barW - 2 * gap) / 2;
+  const startX = pad;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = values.map((v, i) => {
@@ -120,11 +122,13 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
 // Dot Y axis uses 55% of bar height max so dots sit in the lower bar area,
 // clear of the booked-% label at the top.
 function utilizationChart(periods, health) {
-  const W = 330, H = 108;
+  const n = periods.length;
+  const pad = 8;
   const legendW = 68;
-  const barW = 72, gap = 13;
-  const maxBarH = 58;
-  const dotMaxH = Math.round(maxBarH * 0.55);
+  const barW = 46, gap = 12;
+  const W = legendW + n * barW + (n - 1) * gap + pad * 2, H = 108;
+  const maxBarH = 62;
+  const dotMaxH = Math.round(maxBarH * 0.5);
   const botY = 82;
   const labY = 97;
 
@@ -134,7 +138,7 @@ function utilizationChart(periods, health) {
   const maxHours = Math.max(...allHours, 1);
   const hasHours = allHours.length > 0;
 
-  const startX = legendW + Math.round((W - legendW - 3 * barW - 2 * gap) / 2);
+  const startX = legendW + pad;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = periods.map((p, i) => {
@@ -163,9 +167,9 @@ function utilizationChart(periods, health) {
     if (avail !== null && avail > 0) {
       const dotH = Math.max(4, Math.round((avail / maxHours) * dotMaxH));
       const dotY = botY - dotH;
-      const lblY = Math.min(dotY + 15, botY - 3);
-      out += `<circle cx="${cx}" cy="${dotY}" r="5.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2.5"/>`;
-      out += `<text x="${cx}" y="${lblY}" text-anchor="middle" font-size="9.5" fill="#1a1a1a" font-weight="600">${Math.round(avail)}h</text>`;
+      const lblY = Math.min(dotY + 12, botY - 3);
+      out += `<circle cx="${cx}" cy="${dotY}" r="3" fill="#3c2f2a" opacity="0.55"/>`;
+      out += `<text x="${cx}" y="${lblY}" text-anchor="middle" font-size="8" fill="#6b5951">${Math.round(avail)}h</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
@@ -175,7 +179,7 @@ function utilizationChart(periods, health) {
   const legend = hasHours
     ? `<rect x="4" y="36" width="8" height="8" rx="2" fill="${curFill}"/>` +
       `<text x="16" y="44" font-size="8.5" fill="#b09088">Booked %</text>` +
-      `<circle cx="8" cy="56" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
+      `<circle cx="8" cy="56" r="3" fill="#3c2f2a" opacity="0.55"/>` +
       `<text x="16" y="60" font-size="8.5" fill="#b09088">Avail hrs</text>`
     : '';
 
@@ -186,11 +190,13 @@ function utilizationChart(periods, health) {
 // Dot Y axis uses 55% of bar height max so dots sit in lower bar area,
 // clear of the combined-% label at the top.
 function retentionChart(periods, health) {
-  const W = 330, H = 108;
+  const n = periods.length;
+  const pad = 8;
   const legendW = 68;
-  const barW = 72, gap = 13;
-  const maxBarH = 58;
-  const dotMaxH = Math.round(maxBarH * 0.55);
+  const barW = 46, gap = 12;
+  const W = legendW + n * barW + (n - 1) * gap + pad * 2, H = 108;
+  const maxBarH = 62;
+  const dotMaxH = Math.round(maxBarH * 0.5);
   const botY = 82;
   const labY = 97;
 
@@ -199,7 +205,7 @@ function retentionChart(periods, health) {
   const allNew   = periods.map(p => p?.newRetPct).filter(v => v !== null && v > 0);
   const maxNew   = Math.max(...allNew, 1);
 
-  const startX = legendW + Math.round((W - legendW - 3 * barW - 2 * gap) / 2);
+  const startX = legendW + pad;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = periods.map((p, i) => {
@@ -228,9 +234,9 @@ function retentionChart(periods, health) {
     if (newPct !== null && newPct > 0) {
       const dotH = Math.max(4, Math.round((newPct / maxNew) * dotMaxH));
       const dotY = botY - dotH;
-      const lblY = Math.min(dotY + 15, botY - 3);
-      out += `<circle cx="${cx}" cy="${dotY}" r="5.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2.5"/>`;
-      out += `<text x="${cx}" y="${lblY}" text-anchor="middle" font-size="9.5" fill="#1a1a1a" font-weight="600">${Math.round(newPct)}%</text>`;
+      const lblY = Math.min(dotY + 12, botY - 3);
+      out += `<circle cx="${cx}" cy="${dotY}" r="3" fill="#3c2f2a" opacity="0.55"/>`;
+      out += `<text x="${cx}" y="${lblY}" text-anchor="middle" font-size="8" fill="#6b5951">${Math.round(newPct)}%</text>`;
     }
 
     out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${monthAbbrev(p?.label || '')}</text>`;
@@ -240,7 +246,7 @@ function retentionChart(periods, health) {
   const legend =
     `<rect x="4" y="36" width="8" height="8" rx="2" fill="${curFill}"/>` +
     `<text x="16" y="44" font-size="8.5" fill="#b09088">Combined</text>` +
-    `<circle cx="8" cy="56" r="4.5" fill="#ffffff" stroke="#1a1a1a" stroke-width="2"/>` +
+    `<circle cx="8" cy="56" r="3" fill="#3c2f2a" opacity="0.55"/>` +
     `<text x="16" y="60" font-size="8.5" fill="#b09088">New clients</text>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
@@ -272,8 +278,8 @@ function businessPanel(biz) {
       </div>`;
   }
 
-  const [cur, m1, m2] = periods;
-  const pLabels = [cur?.label, m1?.label, m2?.label];
+  const [cur, m1] = periods;
+  const pLabels = periods.map(p => p?.label);
 
   const sh = trendHealthSales(cur?.projectedSales, m1?.sales);
   const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
@@ -284,7 +290,7 @@ function businessPanel(biz) {
     health: sh,
     currentDisplay: fmt$(cur?.sales),
     chart: bigChart(
-      [cur?.sales, m1?.sales, m2?.sales].map(v => v ?? null),
+      periods.map(p => p?.sales ?? null),
       pLabels, sh,
       v => '$' + (v >= 1000 ? Math.round(v / 1000) + 'k' : Math.round(v)),
       projectedTop
@@ -297,7 +303,7 @@ function businessPanel(biz) {
     label: 'Utilization',
     health: uh,
     currentDisplay: fmtPct(cur?.utilization),
-    chart: utilizationChart([cur, m1, m2], uh),
+    chart: utilizationChart(periods, uh),
     projRow: '',
     mtd: true,
   });
@@ -307,7 +313,7 @@ function businessPanel(biz) {
     label: 'Retention',
     health: rh,
     currentDisplay: fmtPct(cur?.retention),
-    chart: retentionChart([cur, m1, m2], rh),
+    chart: retentionChart(periods, rh),
     projRow: '',
   });
 
@@ -398,7 +404,7 @@ function locationsSection(locations) {
   const byKey = Object.fromEntries(locations.map(l => [l.key, l]));
   const columns = [
     { key: 'skinsage_ravenna',   render: () => locationPanel(byKey['skinsage_ravenna']   || { label: 'S&S Ravenna',    error: 'No data' }) },
-    { key: 'ss_coming_soon',     render: () => comingSoonPanel('Skin &amp; Sage') },
+    { key: 'ss_coming_soon',     render: () => comingSoonPanel('Skin &amp; Sage Queen Anne') },
     { key: 'waxon_belltown',     render: () => locationPanel(byKey['waxon_belltown']     || { label: 'WAXON Belltown',   error: 'No data' }) },
     { key: 'waxon_capitol_hill', render: () => locationPanel(byKey['waxon_capitol_hill'] || { label: 'WAXON Capitol Hill', error: 'No data' }) },
   ];
@@ -613,7 +619,7 @@ header h1 {
 
 .kpi-card {
   flex: 1;
-  min-height: 165px;
+  min-height: 128px;
   padding: 8px 16px 6px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -650,7 +656,7 @@ header h1 {
 .kpi-value {
   font-family: var(--serif);
   font-weight: 300;
-  font-size: 26px;
+  font-size: 20px;
   line-height: 1;
   letter-spacing: -.02em;
 }

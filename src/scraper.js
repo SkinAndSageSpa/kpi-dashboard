@@ -58,9 +58,11 @@ function periodKey(monthsAgo) {
 
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || '/tmp/kpi-screenshots';
 
+// Business-level (2-column) panels show 3 historic months + current; location
+// panels show 2 historic + current — same fetch/calc code, just fewer months back.
 const ACCOUNTS = [
-  { key: 'skinsage', label: 'Skin & Sage', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES' },
-  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES'    },
+  { key: 'skinsage', label: 'Skin & Sage', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4 },
+  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4 },
 ];
 
 // Per-location scrapes: same flow + one extra location-filter step.
@@ -571,11 +573,10 @@ async function scrapeAccount(browser, account, cache) {
   }
   console.log(`Logged in: ${page.url()}`);
 
-  const periods = [
-    { monthsAgo: 0, label: monthLabel(0), pickerLabel: monthPickerLabel(0), isCurrent: true  },
-    { monthsAgo: 1, label: monthLabel(1), pickerLabel: monthPickerLabel(1), isCurrent: false },
-    { monthsAgo: 2, label: monthLabel(2), pickerLabel: monthPickerLabel(2), isCurrent: false },
-  ];
+  const monthsBack = account.monthsBack || 3;
+  const periods = Array.from({ length: monthsBack }, (_, monthsAgo) => ({
+    monthsAgo, label: monthLabel(monthsAgo), pickerLabel: monthPickerLabel(monthsAgo), isCurrent: monthsAgo === 0,
+  }));
 
   const results = [];
 
@@ -641,7 +642,7 @@ async function main() {
   const locationData  = [];
   const errors = [];
 
-  const nullPeriods = () => [0, 1, 2].map(monthsAgo => ({
+  const nullPeriods = (monthsBack = 3) => Array.from({ length: monthsBack }, (_, monthsAgo) => ({
     label: monthLabel(monthsAgo), monthsAgo, isCurrent: monthsAgo === 0,
     sales: null, projectedSales: null, utilization: null, retention: null,
   }));
@@ -653,7 +654,7 @@ async function main() {
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
-        businessData.push({ key: account.key, label: account.label, error: err.message, periods: nullPeriods() });
+        businessData.push({ key: account.key, label: account.label, error: err.message, periods: nullPeriods(account.monthsBack) });
       }
     }
 
@@ -663,7 +664,7 @@ async function main() {
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
-        locationData.push({ key: account.locationKey, label: account.label, error: err.message, periods: nullPeriods() });
+        locationData.push({ key: account.locationKey, label: account.label, error: err.message, periods: nullPeriods(account.monthsBack) });
       }
     }
   } finally {
