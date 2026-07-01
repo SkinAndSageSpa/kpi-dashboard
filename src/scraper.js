@@ -35,7 +35,7 @@ const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
-const CACHE_VERSION = 3; // bump when cached period schema changes
+const CACHE_VERSION = 4; // bump when cached period schema changes
 
 function loadCache() {
   try {
@@ -68,8 +68,12 @@ const ACCOUNTS = [
 // Per-location scrapes: same flow + one extra location-filter step.
 const LOCATION_ACCOUNTS = [
   { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna'      },
-  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',      locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown'     },
-  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',  locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill' },
+  // Mangomint's own "Belltown"/"Capitol Hill" filter options are swapped from reality
+  // (confirmed: the "Belltown" filter returns Capitol Hill's real June total of
+  // $31,180.74) — swap which filter string maps to which displayed location here
+  // to compensate, rather than fighting Mangomint's own dropdown labeling.
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',      locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill' },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',  locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown'     },
 ];
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
