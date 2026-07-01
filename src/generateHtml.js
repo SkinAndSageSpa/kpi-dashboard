@@ -506,8 +506,6 @@ header h1 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-  height: calc(100vh - 130px);
-  min-height: 320px;
 }
 
 .section-divider {
@@ -615,7 +613,7 @@ header h1 {
 
 .kpi-card {
   flex: 1;
-  min-height: 0;
+  min-height: 165px;
   padding: 8px 16px 6px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -665,7 +663,7 @@ header h1 {
   overflow: visible;
   padding-top: 6px;
 }
-.kpi-chart svg { width: 100%; height: 100%; min-height: 60px; }
+.kpi-chart svg { width: 100%; height: 100%; min-height: 100px; }
 
 .mtd-tag {
   font-family: var(--sans);

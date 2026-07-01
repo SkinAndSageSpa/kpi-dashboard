@@ -35,7 +35,7 @@ const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
-const CACHE_VERSION = 2; // bump when cached period schema changes
+const CACHE_VERSION = 3; // bump when cached period schema changes
 
 function loadCache() {
   try {
@@ -300,6 +300,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null) 
   await selectPeriod(page, monthOption, `${snapPrefix}_sales`);
   await settle(page, 1000);
   await selectLocation(page, location, snapPrefix ? `${snapPrefix}_sales` : null);
+  await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -383,6 +384,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await selectPeriod(page, monthOption, `${snapPrefix}_util`);
   await settle(page, 1000);
   await selectLocation(page, location, snapPrefix ? `${snapPrefix}_util` : null);
+  await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -409,7 +411,9 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
       return null;
     });
     if (mtd !== null) {
-      return { utilization: mtd.utilization, availableHours: mtd.availableHours ?? frameAvail };
+      // % booked stays MTD (mtd.utilization), but Avail hrs shows the full month's
+      // scheduled availability, not just hours available through today.
+      return { utilization: mtd.utilization, availableHours: frameAvail };
     }
   }
 
@@ -487,6 +491,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   await selectPeriod(page, monthOption, `${snapPrefix}_ret`);
   await settle(page, 1000);
   await selectLocation(page, location, snapPrefix ? `${snapPrefix}_ret` : null);
+  await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
   await settle(page, 7000);
@@ -607,7 +612,11 @@ async function scrapeAccount(browser, account, cache) {
     console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% ret=${retention}%`);
 
     const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct };
-    if (!p.isCurrent) bizCache.periods[key] = periodData;
+    // Only cache a completed month once every metric actually came back —
+    // otherwise a transient failure (e.g. a stuck overlay blocking a click)
+    // gets baked in as permanent nulls until the cache schema version bumps.
+    const complete = sales !== null && utilization !== null && retention !== null;
+    if (!p.isCurrent && complete) bizCache.periods[key] = periodData;
 
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
   }
