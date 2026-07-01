@@ -76,8 +76,10 @@ jobs:
             git checkout --orphan dist
             git rm -rf . --quiet 2>/dev/null || true
           fi
-          cp /tmp/dashboard.html dashboard.html
-          git add dashboard.html
+          cp /tmp/dashboard.html index.html
+          rm -f dashboard.html
+          git add index.html
+          git rm --ignore-unmatch --quiet dashboard.html
           git diff --staged --quiet || git commit -m "Update dashboard $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           git push origin dist
 

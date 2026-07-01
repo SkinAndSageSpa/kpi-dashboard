@@ -783,8 +783,8 @@ async function triggerRefresh(btn) {
 
     setLabel('↻ Downloading…');
 
-    // Fetch dashboard.html directly from the dist branch (no zip/redirect issues)
-    const rawUrl = 'https://raw.githubusercontent.com/' + REPO + '/dist/dashboard.html?t=' + Date.now();
+    // Fetch index.html directly from the dist branch (no zip/redirect issues)
+    const rawUrl = 'https://raw.githubusercontent.com/' + REPO + '/dist/index.html?t=' + Date.now();
     const rawRes = await fetch(rawUrl);
     if (!rawRes.ok) { alert('Could not fetch dashboard: HTTP ' + rawRes.status); return; }
     let html = await rawRes.text();
