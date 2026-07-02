@@ -797,7 +797,7 @@ async function triggerRefresh(btn) {
     // Inject the saved token so it survives navigation to the blob URL
     const savedToken = localStorage.getItem('gh_pat');
     if (savedToken) {
-      const injection = \`<script>try{localStorage.setItem('gh_pat',\${JSON.stringify(savedToken)})}catch(e){}<\/script>\`;
+      const injection = \`<script>try{localStorage.setItem('gh_pat',\${JSON.stringify(savedToken)})}catch(e){}<\\/script>\`;
       html = html.replace('<' + '/head>', injection + '\\n<' + '/head>');
     }
 
