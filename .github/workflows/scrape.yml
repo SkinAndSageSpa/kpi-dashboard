@@ -2,7 +2,9 @@ name: Generate KPI Dashboard
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # 9pm PT daily (UTC-8)
+    - cron: '12 3 * * *'  # 8pm PT daily (currently PDT, UTC-7). Offset minute avoids
+                           # top-of-hour queue congestion. Cron is UTC-fixed, so this
+                           # drifts to 7pm PT once DST ends (~Nov) — bump hour to 4 then.
   workflow_dispatch:
 
 permissions:
