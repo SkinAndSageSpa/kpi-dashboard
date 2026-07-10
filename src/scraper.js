@@ -50,6 +50,24 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
 }
 
+// A single failed report fetch (click timeout, transient Mangomint slowness, etc.)
+// shouldn't leave a hole in the dashboard — retry once after a short pause before
+// giving up and returning null.
+async function withRetry(fn, label) {
+  try {
+    return await fn();
+  } catch (e) {
+    console.error(`  ${label} error (attempt 1): ${e.message} — retrying`);
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      return await fn();
+    } catch (e2) {
+      console.error(`  ${label} error (attempt 2): ${e2.message}`);
+      return null;
+    }
+  }
+}
+
 function periodKey(monthsAgo) {
   const n = ptNow();
   const d = new Date(n.getFullYear(), n.getMonth() - monthsAgo, 1);
@@ -599,11 +617,11 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await fetchSales(page, base, p.pickerLabel, prefix, location).catch(e => { console.error(`  Sales error: ${e.message}`); return null; });
-    const utilResult = await fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location).catch(e => { console.error(`  Util error: ${e.message}`); return null; });
+    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location), 'Sales');
+    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
-    const retResult      = await fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location).catch(e => { console.error(`  Ret error: ${e.message}`); return null; });
+    const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location), 'Ret');
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
