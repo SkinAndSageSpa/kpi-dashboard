@@ -8,9 +8,9 @@ on:
     # Two runs/day is redundancy against that unreliability, not a real requirement —
     # the scraper always re-fetches the current month, so an extra run is harmless.
     - cron: '12 19 * * *'  # ~12:12pm PT midday backup (currently PDT, UTC-7)
-    - cron: '12 3 * * *'   # ~8:12pm PT primary (currently PDT, UTC-7)
+    - cron: '12 2 * * *'   # ~7:12pm PT evening/primary (currently PDT, UTC-7)
     # Cron is UTC-fixed, so both drift an hour earlier once DST ends (~Nov) —
-    # bump hours to 20 and 4 then.
+    # bump hours to 20 and 3 then.
   workflow_dispatch:
 
 permissions:
