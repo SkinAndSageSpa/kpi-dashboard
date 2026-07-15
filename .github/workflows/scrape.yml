@@ -2,15 +2,9 @@ name: Generate KPI Dashboard
 
 on:
   schedule:
-    # GitHub Actions scheduled triggers are best-effort: on 2026-07-10 the 8:12pm PT
-    # run actually fired ~11:53pm PT (4hrs late), pushing MTD math into the next day
-    # and causing a Skin & Sage report-fetch timeout that left the dashboard stale.
-    # Two runs/day is redundancy against that unreliability, not a real requirement —
-    # the scraper always re-fetches the current month, so an extra run is harmless.
-    - cron: '12 19 * * *'  # ~12:12pm PT midday backup (currently PDT, UTC-7)
     - cron: '12 2 * * *'   # ~7:12pm PT evening/primary (currently PDT, UTC-7)
-    # Cron is UTC-fixed, so both drift an hour earlier once DST ends (~Nov) —
-    # bump hours to 20 and 3 then.
+    # Cron is UTC-fixed, so this drifts an hour earlier once DST ends (~Nov) —
+    # bump hour to 3 then.
   workflow_dispatch:
 
 permissions:
