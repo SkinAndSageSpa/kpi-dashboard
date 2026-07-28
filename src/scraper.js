@@ -141,11 +141,35 @@ async function settle(page, extra = 3000) {
   await page.waitForTimeout(extra);
 }
 
+// Occasionally (seen repeatedly on the Skin & Sage account, never on WAXON) a
+// modal using Mangomint's generic "DialogV2" component covers the page and
+// blocks every click — Escape alone doesn't close it. We've never captured
+// what it actually says (only Playwright's "intercepts pointer events" class
+// name), so log its text the moment it's seen — that's the next real clue —
+// and best-effort try to close it before giving up.
 async function dismissOverlays(page) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
+
+  const dialog = page.locator('[class*="DialogV2_componentCt"]').first();
+  if (await dialog.isVisible({ timeout: 1000 }).catch(() => false)) {
+    const text = await dialog.innerText().catch(() => '(unreadable)');
+    console.warn(`  [Dialog] blocking modal detected: ${JSON.stringify(text.slice(0, 500))}`);
+
+    const closeBtn = dialog.locator(
+      'button[aria-label="Close" i], [class*="close" i], button:has-text("Got it"), button:has-text("Dismiss"), button:has-text("OK"), button:has-text("Skip"), button:has-text("Close")'
+    ).first();
+    if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await closeBtn.click().catch(() => {});
+    } else {
+      await page.mouse.click(5, 5).catch(() => {});
+    }
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+  }
 }
 
 // ── Period picker ─────────────────────────────────────────────────────────────
@@ -623,6 +647,11 @@ async function scrapeAccount(browser, account, cache) {
   await context.addCookies(parseCookies(raw));
 
   const page = await context.newPage();
+  // Default Playwright actionability timeout is 30s per click attempt (x2 retries
+  // x3 report types x4 periods = up to 12 minutes wasted on one account if every
+  // click hits a blocking element). 12s is generous next to real click latency
+  // (normally well under 2s) but caps worst-case cost if something's stuck.
+  page.setDefaultTimeout(12000);
   const base = `https://app.mangomint.com/${account.locationId}`;
 
   await page.goto(base, { waitUntil: 'domcontentloaded' });
