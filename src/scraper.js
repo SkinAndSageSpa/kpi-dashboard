@@ -35,7 +35,8 @@ const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
-const CACHE_VERSION = 4; // bump when cached period schema changes
+const CACHE_VERSION = 5; // bump when cached period schema changes, or when a scrape-logic
+                          // change (e.g. archived-staff inclusion) invalidates prior numbers
 
 function loadCache() {
   try {
@@ -299,6 +300,40 @@ async function selectLocation(page, locationName, snapPrefix) {
   if (snapPrefix) await snap(page, `${snapPrefix}_after_loc`);
 }
 
+// ── Staff picker ──────────────────────────────────────────────────────────────
+// Utilization and Retention reports each have their own staff multi-select,
+// defaulting to "Active" staff only — archived staff are listed separately
+// and unchecked by default. Click "Select all" to include them so terminated/
+// archived staff still count toward historical hours and retention totals.
+// Trigger class is stable across report types: "...staffSelectorTriggerBtn...".
+
+async function selectAllStaff(page, snapPrefix) {
+  console.log('  Selecting all staff (incl. archived)');
+  await dismissOverlays(page);
+
+  const trigger = page.locator('[class*="staffSelectorTriggerBtn"]').first();
+  if (!await trigger.isVisible({ timeout: 4000 }).catch(() => false)) {
+    console.warn('  [Staff] trigger not found — skipping (will use default/active-only)');
+    return;
+  }
+  await trigger.click();
+  await page.waitForTimeout(800);
+  if (snapPrefix) await snap(page, `${snapPrefix}_before_staff`);
+
+  const selectAll = page.getByText('Select all', { exact: true });
+  if (await selectAll.count().catch(() => 0) === 0) {
+    console.warn('  [Staff] "Select all" option not found');
+    await page.keyboard.press('Escape');
+    return;
+  }
+  await selectAll.last().click();
+  await page.waitForTimeout(500);
+  console.log('  [Staff] selected all (active + archived)');
+  if (snapPrefix) await snap(page, `${snapPrefix}_after_staff`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+}
+
 // ── Report fetchers ───────────────────────────────────────────────────────────
 
 /**
@@ -408,6 +443,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await selectPeriod(page, monthOption, `${snapPrefix}_util`);
   await settle(page, 1000);
   await selectLocation(page, location, snapPrefix ? `${snapPrefix}_util` : null);
+  await selectAllStaff(page, snapPrefix ? `${snapPrefix}_util` : null);
   await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
@@ -515,6 +551,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   await selectPeriod(page, monthOption, `${snapPrefix}_ret`);
   await settle(page, 1000);
   await selectLocation(page, location, snapPrefix ? `${snapPrefix}_ret` : null);
+  await selectAllStaff(page, snapPrefix ? `${snapPrefix}_ret` : null);
   await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
