@@ -35,8 +35,10 @@ const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
-const CACHE_VERSION = 5; // bump when cached period schema changes, or when a scrape-logic
-                          // change (e.g. archived-staff inclusion) invalidates prior numbers
+const CACHE_VERSION = 6; // bump when cached period schema changes, or when a scrape-logic
+                          // change (e.g. archived-staff inclusion, or excluding staff with
+                          // <1 booked hr from Avail to work around Mangomint's stale-hours
+                          // bug) invalidates prior numbers
 
 function loadCache() {
   try {
@@ -292,6 +294,43 @@ function parseRow(line) {
   return line.split('\t').map(s => s.trim());
 }
 
+// Parse the per-staff rows of a Business Intelligence: Appointments report,
+// between the "Staff\t#\t#\t%..." header and the "All Selected" summary row.
+function parseStaffAvailBooked(text) {
+  const lines = text.split('\n');
+  const headerIdx = lines.findIndex(l => l.startsWith('Staff\t'));
+  const allSelectedIdx = lines.findIndex(l => l.startsWith('All Selected\t'));
+  if (headerIdx === -1 || allSelectedIdx === -1 || allSelectedIdx <= headerIdx) return null;
+
+  const rows = [];
+  for (const line of lines.slice(headerIdx + 1, allSelectedIdx)) {
+    const cols = parseRow(line);
+    const avail = parseFloat(cols[1]);
+    const booked = parseFloat(cols[2]);
+    if (isNaN(avail) || isNaN(booked)) continue;
+    rows.push({ name: cols[0], avail, booked });
+  }
+  return rows;
+}
+
+// Mangomint bug: archived staff sometimes carry stale "available hours" into months
+// they never actually worked (e.g. hours from years ago bleeding into the current
+// month), inflating Avail and understating Booked %. Work around it by recomputing
+// the aggregate ourselves from the per-staff rows, excluding anyone with < 1 booked
+// hour rather than trusting Mangomint's own "All Selected" total.
+function aggregateUtilization(rows) {
+  const active = rows.filter(r => r.booked >= 1);
+  const excluded = rows.length - active.length;
+  if (excluded > 0) {
+    console.log(`  [Utilization] excluding ${excluded} staff with <1 booked hr (Mangomint archived-staff bug)`);
+  }
+  const avail = active.reduce((s, r) => s + r.avail, 0);
+  const booked = active.reduce((s, r) => s + r.booked, 0);
+  const availableHours = Math.round(avail * 100) / 100;
+  if (avail === 0) return { utilization: null, availableHours };
+  return { utilization: Math.round((booked / avail) * 10000) / 100, availableHours };
+}
+
 // ── Location picker ──────────────────────────────────────────────────────────
 // The location dropdown appears in each report's settings panel after clicking
 // the report type. Trigger text is typically "All Locations" or the location name.
@@ -406,7 +445,10 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null) 
 }
 
 /**
- * Business Intelligence: Appointments → Hours Booked % ("All Selected" row, cols[3]).
+ * Business Intelligence: Appointments → Hours Booked %.
+ * Recomputed from the per-staff rows (see aggregateUtilization) rather than trusting
+ * Mangomint's own "All Selected" row, because archived staff can carry stale available
+ * hours into months they never worked, inflating Avail and understating Booked %.
  * For the current month, we first generate the full-month report to capture the iframe
  * URL (which contains staffIds, locationIds, etc.), then open a second page with
  * timePeriodEndExclusive set to tomorrow — giving true MTD utilization.
@@ -442,13 +484,11 @@ async function fetchUtilizationMTD(page) {
     await p.goto(mtdUrl, { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(3000);
     const text = await p.evaluate(() => document.body?.innerText || '');
-    const allRow = text.split('\n').find(l => l.startsWith('All Selected\t'));
-    if (!allRow) { console.warn('  [Util MTD] All Selected row not found'); return null; }
-    const cols = allRow.split('\t').map(s => s.trim());
-    const util  = parseFloat(cols[3]);
-    const avail = parseFloat(cols[1]);
-    console.log(`  [Util MTD] Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
-    return isNaN(util) ? null : { utilization: util, availableHours: isNaN(avail) ? null : avail };
+    const rows = parseStaffAvailBooked(text);
+    if (!rows) { console.warn('  [Util MTD] Staff rows not found'); return null; }
+    const agg = aggregateUtilization(rows);
+    console.log(`  [Util MTD] Avail=${agg.availableHours}, %=${agg.utilization}`);
+    return agg.utilization === null ? null : agg;
   } finally {
     await p.close();
   }
@@ -479,13 +519,12 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   // to get the true MTD utilization %, but keep availableHours from the frame.
   const frameText = await getReportFrameText(page);
   let frameAvail = null;
+  let frameRows = null;
   if (frameText) {
-    const frameLine = frameText.split('\n').find(l => l.startsWith('All Selected\t'));
-    if (frameLine) {
-      const fc = parseRow(frameLine);
-      frameAvail = parseFloat(fc[1]);
-      if (isNaN(frameAvail)) frameAvail = null;
-      console.log(`  [Utilization] frame Avail=${fc[1]}, Booked=${fc[2]}, %=${fc[3]}`);
+    frameRows = parseStaffAvailBooked(frameText);
+    if (frameRows) {
+      frameAvail = aggregateUtilization(frameRows).availableHours;
+      console.log(`  [Utilization] frame Avail=${frameAvail} (after archived-staff filter)`);
     }
   }
 
@@ -501,17 +540,13 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     }
   }
 
-  if (!frameText) return null;
-  const allSelectedLine = frameText.split('\n').find(l => l.startsWith('All Selected\t'));
-  if (!allSelectedLine) {
-    console.warn(`  [Utilization] "All Selected" row not found. Lines: ${frameText.split('\n').slice(0, 8).join(' | ')}`);
+  if (!frameRows) {
+    console.warn(`  [Utilization] Staff rows not found. Lines: ${frameText ? frameText.split('\n').slice(0, 8).join(' | ') : 'n/a'}`);
     return null;
   }
-
-  const cols = parseRow(allSelectedLine);
-  const util = parseFloat(cols[3]);
-  console.log(`  [Utilization] All Selected → Avail=${cols[1]}, Booked=${cols[2]}, %=${cols[3]}`);
-  return isNaN(util) ? null : { utilization: util, availableHours: frameAvail };
+  const agg = aggregateUtilization(frameRows);
+  console.log(`  [Utilization] All Selected (filtered) → Avail=${agg.availableHours}, %=${agg.utilization}`);
+  return agg.utilization === null ? null : { utilization: agg.utilization, availableHours: frameAvail };
 }
 
 /**
