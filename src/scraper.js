@@ -409,7 +409,68 @@ async function selectAllStaff(page, snapPrefix) {
  * "Total" line example:
  * Total\t412\t544\t$30,180.50\t23\t$308.00\t$30,488.50\t$32.56\t$5,760.81\t$36,281.87\t$0.00\t$36,281.87
  */
-async function fetchSales(page, base, monthOption, snapPrefix, location = null) {
+function parseSalesTotal(text) {
+  const lines = text.split('\n');
+  const totalLine = lines.find(l => l.startsWith('Total\t'));
+  if (!totalLine) {
+    console.warn(`  [Sales] "Total" row not found. First 3 lines: ${lines.slice(0, 3).join(' | ')}`);
+    return null;
+  }
+  const cols = parseRow(totalLine);
+  const adjustedTotal = parseDollar(cols[cols.length - 1]); // last column
+  console.log(`  [Sales] Adjusted Total = ${cols[cols.length - 1]} → ${adjustedTotal}`);
+  return adjustedTotal;
+}
+
+// For the current month, the "August 2026"-style preset click in selectPeriod
+// silently fails to apply (it hits the calendar's month/year header text, not an
+// actual selectable option — full month names are only real presets once a month
+// is complete) and Mangomint quietly keeps its default "Today" range instead.
+// This was masked early in the month (Today ≈ MTD) but by mid-month meant "MTD"
+// sales was really just a single day's sales, understating both the MTD figure
+// and the projected-EOM bar by ~daysElapsed×. Same fix as fetchUtilizationMTD:
+// generate first to capture the iframe's real settings/URL, then rewrite the
+// date range directly (1st of month → tomorrow, exclusive) and reload.
+async function fetchSalesMTD(page) {
+  const frame = page.frames().find(
+    f => f.url().includes('/api/v1/reports/total-sales') && f.url().includes('/html')
+  );
+  if (!frame) { console.warn('  [Sales MTD] iframe not found'); return null; }
+
+  let settings;
+  try {
+    const urlObj = new URL(frame.url());
+    settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
+  } catch (e) {
+    console.warn('  [Sales MTD] could not parse settings:', e.message);
+    return null;
+  }
+
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const yyyy = now.getFullYear();
+  const mm   = String(now.getMonth() + 1).padStart(2, '0');
+  now.setDate(now.getDate() + 1); // timePeriodEndExclusive, so today becomes included
+  settings.timePeriodStart = `${yyyy}-${mm}-01`;
+  settings.timePeriodEndExclusive =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  const urlObj2 = new URL(frame.url());
+  urlObj2.searchParams.set('settings', JSON.stringify(settings));
+  const mtdUrl = urlObj2.toString();
+  console.log(`  [Sales MTD] range→${settings.timePeriodStart}..${settings.timePeriodEndExclusive}`);
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(mtdUrl, { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const text = await p.evaluate(() => document.body?.innerText || '');
+    return parseSalesTotal(text);
+  } finally {
+    await p.close();
+  }
+}
+
+async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false) {
   console.log(`\n  [Sales] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -428,20 +489,17 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null) 
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_sales_generated`);
 
-  const text = await getReportFrameText(page);
-  if (!text) return null;
-
-  const lines = text.split('\n');
-  const totalLine = lines.find(l => l.startsWith('Total\t'));
-  if (!totalLine) {
-    console.warn(`  [Sales] "Total" row not found. First 3 lines: ${lines.slice(0, 3).join(' | ')}`);
-    return null;
+  if (isCurrent) {
+    const mtd = await fetchSalesMTD(page).catch(e => {
+      console.warn('  [Sales MTD] error, falling back to full-report read:', e.message);
+      return null;
+    });
+    if (mtd !== null) return mtd;
   }
 
-  const cols = parseRow(totalLine);
-  const adjustedTotal = parseDollar(cols[cols.length - 1]); // last column
-  console.log(`  [Sales] Adjusted Total = ${cols[cols.length - 1]} → ${adjustedTotal}`);
-  return adjustedTotal;
+  const text = await getReportFrameText(page);
+  if (!text) return null;
+  return parseSalesTotal(text);
 }
 
 /**
@@ -718,7 +776,7 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location), 'Sales');
+    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent), 'Sales');
     const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
