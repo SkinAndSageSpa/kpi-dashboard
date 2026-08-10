@@ -428,7 +428,7 @@ function parseSalesTotal(text) {
 // is complete) and Mangomint quietly keeps its default "Today" range instead.
 // This was masked early in the month (Today ≈ MTD) but by mid-month meant "MTD"
 // sales was really just a single day's sales, understating both the MTD figure
-// and the projected-EOM bar by ~daysElapsed×. Same fix as fetchUtilizationMTD:
+// and the projected-EOM bar by ~daysElapsed×. Same fix as fetchUtilizationWindow:
 // generate first to capture the iframe's real settings/URL, then rewrite the
 // date range directly (1st of month → tomorrow, exclusive) and reload.
 async function fetchSalesMTD(page) {
@@ -511,45 +511,68 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
  * URL (which contains staffIds, locationIds, etc.), then open a second page with
  * timePeriodEndExclusive set to tomorrow — giving true MTD utilization.
  */
-async function fetchUtilizationMTD(page) {
+// Same underlying Mangomint quirk as fetchSalesMTD: for the current, incomplete
+// month, the "August 2026"-style preset click in selectPeriod silently fails to
+// apply (it's an inert calendar header until the month is complete), so the
+// report Generate produces stayed on the default "Today" range. The previous
+// version of this function only rewrote timePeriodEndExclusive and inherited
+// timePeriodStart from that broken frame — so the "MTD" fetch was really still
+// just today→tomorrow, a single day, not the 1st-of-month→today range it
+// claimed to be. Now takes both bounds explicitly so callers control the window.
+async function fetchUtilizationWindow(page, startStr, endExclusiveStr) {
   const frame = page.frames().find(
     f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
   );
-  if (!frame) { console.warn('  [Util MTD] iframe not found'); return null; }
+  if (!frame) { console.warn('  [Util window] iframe not found'); return null; }
 
   let settings;
   try {
     const urlObj = new URL(frame.url());
     settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
   } catch(e) {
-    console.warn('  [Util MTD] could not parse settings:', e.message);
+    console.warn('  [Util window] could not parse settings:', e.message);
     return null;
   }
 
-  // Shift end to tomorrow (timePeriodEndExclusive is exclusive, so today becomes included)
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  now.setDate(now.getDate() + 1);
-  settings.timePeriodEndExclusive =
-    `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  settings.timePeriodStart = startStr;
+  settings.timePeriodEndExclusive = endExclusiveStr;
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
-  const mtdUrl = urlObj2.toString();
-  console.log(`  [Util MTD] end→${settings.timePeriodEndExclusive}`);
+  const windowUrl = urlObj2.toString();
+  console.log(`  [Util window] range→${startStr}..${endExclusiveStr}`);
 
   const p = await page.context().newPage();
   try {
-    await p.goto(mtdUrl, { waitUntil: 'domcontentloaded' });
+    await p.goto(windowUrl, { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(3000);
     const text = await p.evaluate(() => document.body?.innerText || '');
     const rows = parseStaffAvailBooked(text);
-    if (!rows) { console.warn('  [Util MTD] Staff rows not found'); return null; }
+    if (!rows) { console.warn('  [Util window] Staff rows not found'); return null; }
     const agg = aggregateUtilization(rows);
-    console.log(`  [Util MTD] Avail=${agg.availableHours}, %=${agg.utilization}`);
+    console.log(`  [Util window] Avail=${agg.availableHours}, %=${agg.utilization}`);
     return agg.utilization === null ? null : agg;
   } finally {
     await p.close();
   }
+}
+
+// 1st-of-month → tomorrow (MTD, exclusive) and 1st-of-month → 1st-of-next-month
+// (full month, including future scheduled hours) in the account's local time.
+function currentMonthWindows() {
+  const now  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const yyyy = now.getFullYear();
+  const mm   = String(now.getMonth() + 1).padStart(2, '0');
+  const monthStart = `${yyyy}-${mm}-01`;
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const mtdEnd = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const fullMonthEnd = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
+
+  return { monthStart, mtdEnd, fullMonthEnd };
 }
 
 async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null) {
@@ -572,9 +595,11 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_util_generated`);
 
-  // Always read the full-month frame first to capture availableHours reliably.
-  // For current month we then open a second page with tomorrow as the end date
-  // to get the true MTD utilization %, but keep availableHours from the frame.
+  // The frame Generate just produced is only trustworthy as-is for a completed
+  // month's full-month preset. For the current month that preset silently failed
+  // to apply (see fetchUtilizationWindow), so its date range is actually just
+  // "today" — reading availableHours straight from it would badly understate the
+  // full month's scheduled hours. Read it directly only for non-current months.
   const frameText = await getReportFrameText(page);
   let frameAvail = null;
   let frameRows = null;
@@ -587,14 +612,21 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   }
 
   if (isCurrent) {
-    const mtd = await fetchUtilizationMTD(page).catch(e => {
-      console.warn('  [Util MTD] error, falling back to full month:', e.message);
-      return null;
-    });
+    const { monthStart, mtdEnd, fullMonthEnd } = currentMonthWindows();
+    const [fullMonth, mtd] = await Promise.all([
+      fetchUtilizationWindow(page, monthStart, fullMonthEnd).catch(e => {
+        console.warn('  [Util window] full-month error:', e.message);
+        return null;
+      }),
+      fetchUtilizationWindow(page, monthStart, mtdEnd).catch(e => {
+        console.warn('  [Util window] MTD error:', e.message);
+        return null;
+      }),
+    ]);
     if (mtd !== null) {
-      // % booked stays MTD (mtd.utilization), but Avail hrs shows the full month's
-      // scheduled availability, not just hours available through today.
-      return { utilization: mtd.utilization, availableHours: frameAvail };
+      // % booked stays MTD, but Avail hrs shows the full month's scheduled
+      // availability (incl. future days), not just hours available through today.
+      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? frameAvail };
     }
   }
 
