@@ -3,9 +3,9 @@
  * Large-chart, minimal-text KPI dashboard. Light, soft, feminine.
  */
 
-// Health colors based on change vs prior month, not absolute thresholds.
-// Sales: projected EOM vs prior month's full sales (±3% band = amber).
-// Utilization / Retention: current vs prior month in pp (±2pp band = amber).
+// Sales: trend vs prior month's full sales (±3% band = amber).
+// Retention: trend vs prior month in pp (±2pp band = amber).
+// Utilization: absolute booked % thresholds (green ≥60%, amber 50-59%, red <50%).
 
 function trendHealthSales(projected, priorFull) {
   if (projected === null || priorFull === null || priorFull === 0) return 'neutral';
@@ -21,6 +21,14 @@ function trendHealthPp(current, prior, threshold = 2) {
   if (delta >  threshold) return 'green';
   if (delta < -threshold) return 'red';
   return 'amber';
+}
+
+// Utilization: absolute booked % thresholds, not trend vs prior month.
+function utilizationHealth(current) {
+  if (current === null || current === undefined) return 'neutral';
+  if (current >= 60) return 'green';
+  if (current >= 50) return 'amber';
+  return 'red';
 }
 
 function fmt$(n) {
@@ -299,7 +307,7 @@ function businessPanel(biz) {
     mtd: true,
   });
 
-  const uh = trendHealthPp(cur?.utilization, m1?.utilization);
+  const uh = utilizationHealth(cur?.utilization);
   const utilCard = kpiCard({
     label: 'Utilization',
     health: uh,
@@ -372,7 +380,7 @@ function locationPanel(loc) {
     mtd: true,
   });
 
-  const uh = trendHealthPp(cur?.utilization, m1?.utilization);
+  const uh = utilizationHealth(cur?.utilization);
   const utilCard = kpiCard({
     label: 'Utilization', health: uh, currentDisplay: fmtPct(cur?.utilization),
     chart: utilizationChart([cur, m1, m2], uh), mtd: true,
@@ -721,7 +729,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Colors = trend vs prior month: green ↑ · amber ≈ · red ↓
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
 </footer>
 
 <script>
