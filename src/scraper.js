@@ -116,7 +116,21 @@ function daysInMonth(monthsAgo = 0) {
   return new Date(n.getFullYear(), n.getMonth() - monthsAgo + 1, 0).getDate();
 }
 
-function dayOfMonth() { return ptNow().getDate(); }
+function dayOfMonth() {
+  const n = ptNow();
+  // GitHub Actions' schedule trigger has repeatedly fired this run many hours
+  // late — sometimes landing the next morning instead of the prior evening
+  // (see kpi-dashboard memory, 2026-08-27/28 incident). When that happens,
+  // "today" per the wall clock is a day that's barely started (near-zero
+  // sales/completed appointments so far), but dayOfMonth() would still count
+  // it as a fully elapsed day — understating the sales-per-day rate and
+  // skewing the EOM projection low. Treat any run before noon PT as still
+  // reporting on the previous day.
+  if (n.getHours() < 12) {
+    n.setDate(n.getDate() - 1);
+  }
+  return n.getDate();
+}
 
 // ── Playwright helpers ────────────────────────────────────────────────────────
 
