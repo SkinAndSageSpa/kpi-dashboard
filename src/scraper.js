@@ -157,19 +157,23 @@ async function settle(page, extra = 3000) {
   await page.waitForTimeout(extra);
 }
 
-// Occasionally (seen repeatedly on the Skin & Sage account, never on WAXON) a
-// modal using Mangomint's generic "DialogV2" component covers the page and
-// blocks every click — Escape alone doesn't close it. We've never captured
-// what it actually says (only Playwright's "intercepts pointer events" class
-// name), so log its text the moment it's seen — that's the next real clue —
-// and best-effort try to close it before giving up.
+// Occasionally a modal using one of Mangomint's generic "Dialog" components
+// covers the page and blocks every click — Escape alone doesn't close it.
+// First seen repeatedly on Skin & Sage as "DialogV2_componentCt"; on
+// 2026-08-29 the same failure mode showed up on WAXON as plain
+// "Dialog_componentCt" instead — a different component variant the old
+// selector didn't match — so this now matches any class containing both
+// "Dialog" and "componentCt" to catch current and future variants. We've
+// never captured what it actually says (only Playwright's "intercepts
+// pointer events" class name), so log its text the moment it's seen — that's
+// the next real clue — and best-effort try to close it before giving up.
 async function dismissOverlays(page) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
-  const dialog = page.locator('[class*="DialogV2_componentCt"]').first();
+  const dialog = page.locator('[class*="Dialog"][class*="componentCt"]').first();
   if (await dialog.isVisible({ timeout: 1000 }).catch(() => false)) {
     const text = await dialog.innerText().catch(() => '(unreadable)');
     console.warn(`  [Dialog] blocking modal detected: ${JSON.stringify(text.slice(0, 500))}`);
