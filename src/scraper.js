@@ -35,10 +35,14 @@ const path = require('path');
 const { generateHtml } = require('./generateHtml');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
-const CACHE_VERSION = 6; // bump when cached period schema changes, or when a scrape-logic
+const CACHE_VERSION = 7; // bump when cached period schema changes, or when a scrape-logic
                           // change (e.g. archived-staff inclusion, or excluding staff with
                           // <1 booked hr from Avail to work around Mangomint's stale-hours
-                          // bug) invalidates prior numbers
+                          // bug) invalidates prior numbers.
+                          // v7: completed-month sales/util now fetch via explicit
+                          // date-range URL rewrite instead of the (now broken) month
+                          // picker preset — drops cached months poisoned by the
+                          // picker collapsing every past month to a single $0 day.
 
 function loadCache() {
   try {
@@ -440,46 +444,43 @@ function parseSalesTotal(text) {
   return adjustedTotal;
 }
 
-// For the current month, the "August 2026"-style preset click in selectPeriod
-// silently fails to apply (it hits the calendar's month/year header text, not an
-// actual selectable option — full month names are only real presets once a month
-// is complete) and Mangomint quietly keeps its default "Today" range instead.
-// This was masked early in the month (Today ≈ MTD) but by mid-month meant "MTD"
-// sales was really just a single day's sales, understating both the MTD figure
-// and the projected-EOM bar by ~daysElapsed×. Same fix as fetchUtilizationWindow:
-// generate first to capture the iframe's real settings/URL, then rewrite the
-// date range directly (1st of month → tomorrow, exclusive) and reload.
-async function fetchSalesMTD(page) {
+// The "August 2026"-style preset click in selectPeriod is unreliable for BOTH
+// the current month (it hits inert calendar-header text, not a real option) and,
+// since ~Sep 2026, completed past months too (Mangomint stopped surfacing full
+// month names as selectable dropdown options — "Option \"August 2026\" not
+// found" — so Generate quietly runs against whatever default range is loaded,
+// which after a month rollover is a single day → every completed-month sales
+// figure collapsed to $0). Retention already sidesteps the picker entirely by
+// rewriting the iframe settings URL with explicit dates; sales and utilization
+// now do the same for every month. Flow: let Generate produce *a* report (any
+// range) so the iframe exists, harvest its real settings (staffIds, locationIds,
+// report name) from the URL, then rewrite timePeriodStart/EndExclusive and
+// reload in a fresh page.
+async function fetchSalesWindow(page, startStr, endExclusiveStr) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/total-sales') && f.url().includes('/html')
   );
-  if (!frame) { console.warn('  [Sales MTD] iframe not found'); return null; }
+  if (!frame) { console.warn('  [Sales window] iframe not found'); return null; }
 
   let settings;
   try {
     const urlObj = new URL(frame.url());
     settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
   } catch (e) {
-    console.warn('  [Sales MTD] could not parse settings:', e.message);
+    console.warn('  [Sales window] could not parse settings:', e.message);
     return null;
   }
 
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  const yyyy = now.getFullYear();
-  const mm   = String(now.getMonth() + 1).padStart(2, '0');
-  now.setDate(now.getDate() + 1); // timePeriodEndExclusive, so today becomes included
-  settings.timePeriodStart = `${yyyy}-${mm}-01`;
-  settings.timePeriodEndExclusive =
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  settings.timePeriodStart        = startStr;
+  settings.timePeriodEndExclusive = endExclusiveStr;
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
-  const mtdUrl = urlObj2.toString();
-  console.log(`  [Sales MTD] range→${settings.timePeriodStart}..${settings.timePeriodEndExclusive}`);
+  console.log(`  [Sales window] range→${startStr}..${endExclusiveStr}`);
 
   const p = await page.context().newPage();
   try {
-    await p.goto(mtdUrl, { waitUntil: 'domcontentloaded' });
+    await p.goto(urlObj2.toString(), { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(3000);
     const text = await p.evaluate(() => document.body?.innerText || '');
     return parseSalesTotal(text);
@@ -488,7 +489,19 @@ async function fetchSalesMTD(page) {
   }
 }
 
-async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false) {
+// 1st of month → tomorrow (exclusive, so today is included) for the current
+// month's MTD sales figure.
+function salesMTDWindow() {
+  const now = ptNow();
+  const yyyy = now.getFullYear();
+  const mm   = String(now.getMonth() + 1).padStart(2, '0');
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { start: `${yyyy}-${mm}-01`, endExclusive: fmt(tomorrow) };
+}
+
+async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false, monthsAgo = 0) {
   console.log(`\n  [Sales] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -507,13 +520,15 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_sales_generated`);
 
-  if (isCurrent) {
-    const mtd = await fetchSalesMTD(page).catch(e => {
-      console.warn('  [Sales MTD] error, falling back to full-report read:', e.message);
-      return null;
-    });
-    if (mtd !== null) return mtd;
-  }
+  // Don't trust the picker (see fetchSalesWindow) — always re-fetch against an
+  // explicit date range: 1st→tomorrow for the current month, the full calendar
+  // month for a completed one.
+  const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
+  const windowed = await fetchSalesWindow(page, win.start, win.endExclusive).catch(e => {
+    console.warn('  [Sales window] error, falling back to full-report read:', e.message);
+    return null;
+  });
+  if (windowed !== null) return windowed;
 
   const text = await getReportFrameText(page);
   if (!text) return null;
@@ -529,7 +544,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
  * URL (which contains staffIds, locationIds, etc.), then open a second page with
  * timePeriodEndExclusive set to tomorrow — giving true MTD utilization.
  */
-// Same underlying Mangomint quirk as fetchSalesMTD: for the current, incomplete
+// Same underlying Mangomint quirk as fetchSalesWindow: for the current, incomplete
 // month, the "August 2026"-style preset click in selectPeriod silently fails to
 // apply (it's an inert calendar header until the month is complete), so the
 // report Generate produces stayed on the default "Today" range. The previous
@@ -593,7 +608,17 @@ function currentMonthWindows() {
   return { monthStart, mtdEnd, fullMonthEnd };
 }
 
-async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null) {
+// 1st of a completed month → 1st of the following month (exclusive), in the
+// account's local time. monthsAgo is 1-based here (1 = last month).
+function completedMonthWindow(monthsAgo) {
+  const n = ptNow();
+  const start = new Date(n.getFullYear(), n.getMonth() - monthsAgo, 1);
+  const end   = new Date(n.getFullYear(), n.getMonth() - monthsAgo + 1, 1);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { start: fmt(start), endExclusive: fmt(end) };
+}
+
+async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null, monthsAgo = 0) {
   console.log(`\n  [Utilization] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -645,6 +670,21 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
       // % booked stays MTD, but Avail hrs shows the full month's scheduled
       // availability (incl. future days), not just hours available through today.
       return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? frameAvail };
+    }
+  }
+
+  // Completed month: the picker preset can't be trusted either (see
+  // fetchSalesWindow) — the frame Generate produced may be on a stale 1-day
+  // default range after a month rollover. Re-fetch against the explicit full
+  // calendar month instead of reading that frame directly.
+  if (!isCurrent) {
+    const { start, endExclusive } = completedMonthWindow(monthsAgo);
+    const windowed = await fetchUtilizationWindow(page, start, endExclusive).catch(e => {
+      console.warn('  [Util window] completed-month error:', e.message);
+      return null;
+    });
+    if (windowed) {
+      return { utilization: windowed.utilization, availableHours: windowed.availableHours };
     }
   }
 
@@ -826,8 +866,8 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent), 'Sales');
-    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location), 'Util');
+    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo), 'Sales');
+    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
     const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location), 'Ret');
