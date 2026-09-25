@@ -90,16 +90,39 @@ const ACCOUNTS = [
   { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4 },
 ];
 
-// Per-location scrapes: same flow + one extra location-filter step.
+// Per-location scrapes: same flow, but each report's settings URL gets its
+// locationIds overridden to exactly this location (see applyLocationIds).
+// IDs are Mangomint's per-account location ids, read from real report iframe
+// URLs: Skin & Sage Ravenna=1 (its only id before Queen Anne was added
+// 2026-09-17), Queen Anne=2; WAXON Capitol Hill=1, Belltown=2.
+//
+// Don't go back to clicking the Reports-page location dropdown: it's a
+// multi-select with every location checked by default, so clicking a location
+// name *unchecks* it and leaves only the others. That's why WAXON's "Belltown"
+// click used to return Capitol Hill's numbers (previously misread as Mangomint
+// swapping its labels), and why Ravenna silently collapsed to Queen Anne's $0
+// from 2026-09-18 onward once Skin & Sage had a second location.
+//
+// openedPeriod: months before this (YYYY-MM) are shown as empty without scraping.
 const LOCATION_ACCOUNTS = [
-  { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna'      },
-  // Mangomint's own "Belltown"/"Capitol Hill" filter options are swapped from reality
-  // (confirmed: the "Belltown" filter returns Capitol Hill's real June total of
-  // $31,180.74) — swap which filter string maps to which displayed location here
-  // to compensate, rather than fighting Mangomint's own dropdown labeling.
-  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',      locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill' },
-  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',  locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown'     },
+  { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna',    locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna',      locationIds: [1] },
+  { key: 'skinsage', locationKey: 'skinsage_queenanne', label: 'Skin & Sage Queen Anne', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Queen Anne',   locationIds: [2], openedPeriod: '2026-09' },
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2] },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1] },
 ];
+
+// Narrow a harvested (all-locations) report settings object to one location.
+// Warns if the report didn't include that id at all, i.e. Mangomint's ids
+// changed and the mapping above needs re-checking.
+function applyLocationIds(settings, locationIds, tag) {
+  if (!locationIds) return;
+  const avail = Array.isArray(settings.locationIds) ? settings.locationIds : [];
+  const missing = locationIds.filter(id => !avail.includes(id));
+  if (missing.length) {
+    console.warn(`  [${tag}] locationIds ${JSON.stringify(missing)} not in report's ${JSON.stringify(avail)} — location id mapping may be stale`);
+  }
+  settings.locationIds = locationIds;
+}
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -353,38 +376,6 @@ function aggregateUtilization(rows) {
   return { utilization: Math.round((booked / avail) * 10000) / 100, availableHours };
 }
 
-// ── Location picker ──────────────────────────────────────────────────────────
-// The location dropdown appears in each report's settings panel after clicking
-// the report type. Trigger text is typically "All Locations" or the location name.
-
-async function selectLocation(page, locationName, snapPrefix) {
-  if (!locationName) return;
-  console.log(`  Selecting location: "${locationName}"`);
-  await dismissOverlays(page);
-
-  if (snapPrefix) await snap(page, `${snapPrefix}_before_loc`);
-
-  const LOC_TRIGGER_RE = /All Locations|Belltown|Capitol Hill|Ravenna/i;
-  const trigger = page.getByText(LOC_TRIGGER_RE, { exact: false }).first();
-  if (!await trigger.isVisible({ timeout: 4000 }).catch(() => false)) {
-    console.warn(`  [Location] trigger not found — skipping filter (will use default/all)`);
-    return;
-  }
-  await trigger.click();
-  await page.waitForTimeout(1200);
-
-  const option = page.getByText(locationName, { exact: true });
-  if (await option.count().catch(() => 0) === 0) {
-    console.warn(`  [Location] option "${locationName}" not found in dropdown`);
-    await page.keyboard.press('Escape');
-    return;
-  }
-  await option.last().click();
-  await page.waitForTimeout(1200);
-  console.log(`  [Location] set to "${locationName}"`);
-  if (snapPrefix) await snap(page, `${snapPrefix}_after_loc`);
-}
-
 // ── Staff picker ──────────────────────────────────────────────────────────────
 // Utilization and Retention reports each have their own staff multi-select,
 // defaulting to "Active" staff only — archived staff are listed separately
@@ -456,7 +447,7 @@ function parseSalesTotal(text) {
 // range) so the iframe exists, harvest its real settings (staffIds, locationIds,
 // report name) from the URL, then rewrite timePeriodStart/EndExclusive and
 // reload in a fresh page.
-async function fetchSalesWindow(page, startStr, endExclusiveStr) {
+async function fetchSalesWindow(page, startStr, endExclusiveStr, locationIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/total-sales') && f.url().includes('/html')
   );
@@ -473,6 +464,7 @@ async function fetchSalesWindow(page, startStr, endExclusiveStr) {
 
   settings.timePeriodStart        = startStr;
   settings.timePeriodEndExclusive = endExclusiveStr;
+  applyLocationIds(settings, locationIds, 'Sales window');
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -501,7 +493,7 @@ function salesMTDWindow() {
   return { start: `${yyyy}-${mm}-01`, endExclusive: fmt(tomorrow) };
 }
 
-async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false, monthsAgo = 0) {
+async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false, monthsAgo = 0, locationIds = null) {
   console.log(`\n  [Sales] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -513,7 +505,6 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
 
   await selectPeriod(page, monthOption, `${snapPrefix}_sales`);
   await settle(page, 1000);
-  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_sales` : null);
   await dismissOverlays(page);
 
   await page.getByText('Generate', { exact: true }).first().click();
@@ -524,7 +515,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
   // explicit date range: 1st→tomorrow for the current month, the full calendar
   // month for a completed one.
   const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
-  const windowed = await fetchSalesWindow(page, win.start, win.endExclusive).catch(e => {
+  const windowed = await fetchSalesWindow(page, win.start, win.endExclusive, locationIds).catch(e => {
     console.warn('  [Sales window] error, falling back to full-report read:', e.message);
     return null;
   });
@@ -552,7 +543,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
 // timePeriodStart from that broken frame — so the "MTD" fetch was really still
 // just today→tomorrow, a single day, not the 1st-of-month→today range it
 // claimed to be. Now takes both bounds explicitly so callers control the window.
-async function fetchUtilizationWindow(page, startStr, endExclusiveStr) {
+async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
   );
@@ -569,6 +560,7 @@ async function fetchUtilizationWindow(page, startStr, endExclusiveStr) {
 
   settings.timePeriodStart = startStr;
   settings.timePeriodEndExclusive = endExclusiveStr;
+  applyLocationIds(settings, locationIds, 'Util window');
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -618,7 +610,7 @@ function completedMonthWindow(monthsAgo) {
   return { start: fmt(start), endExclusive: fmt(end) };
 }
 
-async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null, monthsAgo = 0) {
+async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null, monthsAgo = 0, locationIds = null) {
   console.log(`\n  [Utilization] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -630,7 +622,6 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
 
   await selectPeriod(page, monthOption, `${snapPrefix}_util`);
   await settle(page, 1000);
-  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_util` : null);
   await selectAllStaff(page, snapPrefix ? `${snapPrefix}_util` : null);
   await dismissOverlays(page);
 
@@ -657,11 +648,11 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   if (isCurrent) {
     const { monthStart, mtdEnd, fullMonthEnd } = currentMonthWindows();
     const [fullMonth, mtd] = await Promise.all([
-      fetchUtilizationWindow(page, monthStart, fullMonthEnd).catch(e => {
+      fetchUtilizationWindow(page, monthStart, fullMonthEnd, locationIds).catch(e => {
         console.warn('  [Util window] full-month error:', e.message);
         return null;
       }),
-      fetchUtilizationWindow(page, monthStart, mtdEnd).catch(e => {
+      fetchUtilizationWindow(page, monthStart, mtdEnd, locationIds).catch(e => {
         console.warn('  [Util window] MTD error:', e.message);
         return null;
       }),
@@ -679,7 +670,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   // calendar month instead of reading that frame directly.
   if (!isCurrent) {
     const { start, endExclusive } = completedMonthWindow(monthsAgo);
-    const windowed = await fetchUtilizationWindow(page, start, endExclusive).catch(e => {
+    const windowed = await fetchUtilizationWindow(page, start, endExclusive, locationIds).catch(e => {
       console.warn('  [Util window] completed-month error:', e.message);
       return null;
     });
@@ -713,7 +704,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
 // After generating the single-month retention report (to capture iframe URL+settings),
 // open a second page with explicit start/end dates for a 60-day rolling window.
 // Anchor: today for current month, last day of month for completed months.
-async function fetchRetentionWindow(page, startStr, endExclusiveStr) {
+async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/') && f.url().includes('/html')
   );
@@ -730,6 +721,7 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr) {
 
   settings.timePeriodStart         = startStr;
   settings.timePeriodEndExclusive  = endExclusiveStr;
+  applyLocationIds(settings, locationIds, 'Retention 60d');
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -745,7 +737,7 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr) {
   }
 }
 
-async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null) {
+async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null, locationIds = null) {
   console.log(`\n  [Retention] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -757,7 +749,6 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
 
   await selectPeriod(page, monthOption, `${snapPrefix}_ret`);
   await settle(page, 1000);
-  await selectLocation(page, location, snapPrefix ? `${snapPrefix}_ret` : null);
   await selectAllStaff(page, snapPrefix ? `${snapPrefix}_ret` : null);
   await dismissOverlays(page);
 
@@ -776,7 +767,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   const startDate         = new Date(targetDate.getFullYear(), quarterStartMonth, 1);
   const endDate           = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
 
-  const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate)).catch(e => {
+  const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate), locationIds).catch(e => {
     console.warn('  [Retention 60d] error, falling back to single month:', e.message);
     return null;
   });
@@ -853,6 +844,7 @@ async function scrapeAccount(browser, account, cache) {
 
   const cacheKey = account.locationKey || account.key;
   const location = account.location || null;
+  const locationIds = account.locationIds || null;
   const bizCache = cache.businesses[cacheKey] || (cache.businesses[cacheKey] = { periods: {} });
 
   for (const p of periods) {
@@ -866,11 +858,19 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo), 'Sales');
-    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo), 'Util');
+    if (account.openedPeriod && key < account.openedPeriod) {
+      console.log(`  Before ${account.label} opened (${account.openedPeriod}) — skipping`);
+      results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent,
+        sales: null, projectedSales: null, utilization: null, availableHours: null,
+        retention: null, existingRetPct: null, newRetPct: null });
+      continue;
+    }
+
+    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo, locationIds), 'Sales');
+    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo, locationIds), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
-    const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location), 'Ret');
+    const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location, locationIds), 'Ret');
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
