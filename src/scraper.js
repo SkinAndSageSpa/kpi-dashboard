@@ -520,6 +520,8 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
     return null;
   });
   if (windowed !== null) return windowed;
+  // The Generate frame covers all locations — never report it as one location's number.
+  if (locationIds) return null;
 
   const text = await getReportFrameText(page);
   if (!text) return null;
@@ -660,7 +662,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     if (mtd !== null) {
       // % booked stays MTD, but Avail hrs shows the full month's scheduled
       // availability (incl. future days), not just hours available through today.
-      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? frameAvail };
+      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? (locationIds ? null : frameAvail) };
     }
   }
 
@@ -679,6 +681,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     }
   }
 
+  if (locationIds) return null; // Generate frame is all-locations, see fetchSales
   if (!frameRows) {
     console.warn(`  [Utilization] Staff rows not found. Lines: ${frameText ? frameText.split('\n').slice(0, 8).join(' | ') : 'n/a'}`);
     return null;
@@ -771,6 +774,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
     console.warn('  [Retention 60d] error, falling back to single month:', e.message);
     return null;
   });
+  if (!windowText && locationIds) return null; // Generate frame is all-locations, see fetchSales
   const text = windowText || await getReportFrameText(page);
   if (!text) return null;
 
