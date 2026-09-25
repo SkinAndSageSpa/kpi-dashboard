@@ -348,16 +348,6 @@ function businessPanel(biz) {
     </div>`;
 }
 
-function comingSoonPanel(label) {
-  return `
-    <div class="loc-panel">
-      <div class="biz-header">
-        <div class="biz-name">${label}</div>
-      </div>
-      <div class="placeholder-body">Opening soon</div>
-    </div>`;
-}
-
 function locationPanel(loc) {
   if (loc.error) {
     return `
@@ -416,7 +406,7 @@ function locationsSection(locations) {
   const byKey = Object.fromEntries(locations.map(l => [l.key, l]));
   const columns = [
     { key: 'skinsage_ravenna',   render: () => locationPanel(byKey['skinsage_ravenna']   || { label: 'S&S Ravenna',    error: 'No data' }) },
-    { key: 'ss_coming_soon',     render: () => comingSoonPanel('Skin &amp; Sage Queen Anne') },
+    { key: 'skinsage_queenanne', render: () => locationPanel(byKey['skinsage_queenanne'] || { label: 'S&S Queen Anne', error: 'No data' }) },
     { key: 'waxon_belltown',     render: () => locationPanel(byKey['waxon_belltown']     || { label: 'WAXON Belltown',   error: 'No data' }) },
     { key: 'waxon_capitol_hill', render: () => locationPanel(byKey['waxon_capitol_hill'] || { label: 'WAXON Capitol Hill', error: 'No data' }) },
   ];
