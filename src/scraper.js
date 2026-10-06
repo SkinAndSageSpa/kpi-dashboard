@@ -24,6 +24,11 @@
  *     cols[1]=ExistTotal, cols[8]=ExistRet180#, cols[10]=NewTotal, cols[17]=NewRet180#
  *     Formula: (cols[8] + cols[17]) / (cols[1] + cols[10]) * 100
  *
+ * Outputs (paths overridable via env):
+ *   DASHBOARD_OUT       owner dashboard (both businesses)        → dist/index.html
+ *   TEAM_SKINSAGE_OUT   Skin & Sage employee page, Esti vs LMT    → dist/skinsage/index.html
+ *   TEAM_WAXON_OUT      WAXON employee page                       → dist/waxon/index.html
+ *
  * Env vars:
  *   SKINSAGE_MANGOMINT_COOKIES
  *   WAXON_MANGOMINT_COOKIES
@@ -32,7 +37,8 @@
 const { chromium } = require('playwright');
 const fs   = require('fs');
 const path = require('path');
-const { generateHtml } = require('./generateHtml');
+const { generateHtml, generateTeamHtml } = require('./generateHtml');
+const { SKINSAGE_STAFF, staffIdsFor } = require('./staffGroups');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
 const CACHE_VERSION = 7; // bump when cached period schema changes, or when a scrape-logic
@@ -111,6 +117,17 @@ const LOCATION_ACCOUNTS = [
   { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1] },
 ];
 
+// Per-role scrapes for the Skin & Sage employee page: same flow again, but each
+// report's settings.staffIds is overridden to just that role's providers (see
+// staffGroups.js). All three reports honor a narrowed staffIds — confirmed by
+// probe 2026-10-06: the two halves of the staff list summed back to the full
+// utilization hours exactly, and to within ~0.3% (sales) / ~1% (retention clients)
+// since a sale or client shared by two providers counts for each of them.
+const STAFF_GROUP_ACCOUNTS = [
+  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, staffIds: staffIdsFor('esti') },
+  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, staffIds: staffIdsFor('lmt') },
+];
+
 // Narrow a harvested (all-locations) report settings object to one location.
 // Warns if the report didn't include that id at all, i.e. Mangomint's ids
 // changed and the mapping above needs re-checking.
@@ -122,6 +139,12 @@ function applyLocationIds(settings, locationIds, tag) {
     console.warn(`  [${tag}] locationIds ${JSON.stringify(missing)} not in report's ${JSON.stringify(avail)} — location id mapping may be stale`);
   }
   settings.locationIds = locationIds;
+}
+
+// Narrow a harvested report settings object to a set of staff (Sales Summary's
+// default is staffIds: null = everyone; the others list every selected id).
+function applyStaffIds(settings, staffIds) {
+  if (staffIds) settings.staffIds = staffIds;
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -447,7 +470,7 @@ function parseSalesTotal(text) {
 // range) so the iframe exists, harvest its real settings (staffIds, locationIds,
 // report name) from the URL, then rewrite timePeriodStart/EndExclusive and
 // reload in a fresh page.
-async function fetchSalesWindow(page, startStr, endExclusiveStr, locationIds = null) {
+async function fetchSalesWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/total-sales') && f.url().includes('/html')
   );
@@ -465,6 +488,7 @@ async function fetchSalesWindow(page, startStr, endExclusiveStr, locationIds = n
   settings.timePeriodStart        = startStr;
   settings.timePeriodEndExclusive = endExclusiveStr;
   applyLocationIds(settings, locationIds, 'Sales window');
+  applyStaffIds(settings, staffIds);
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -493,7 +517,7 @@ function salesMTDWindow() {
   return { start: `${yyyy}-${mm}-01`, endExclusive: fmt(tomorrow) };
 }
 
-async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false, monthsAgo = 0, locationIds = null) {
+async function fetchSales(page, base, monthOption, snapPrefix, location = null, isCurrent = false, monthsAgo = 0, locationIds = null, staffIds = null) {
   console.log(`\n  [Sales] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -515,13 +539,14 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
   // explicit date range: 1st→tomorrow for the current month, the full calendar
   // month for a completed one.
   const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
-  const windowed = await fetchSalesWindow(page, win.start, win.endExclusive, locationIds).catch(e => {
+  const windowed = await fetchSalesWindow(page, win.start, win.endExclusive, locationIds, staffIds).catch(e => {
     console.warn('  [Sales window] error, falling back to full-report read:', e.message);
     return null;
   });
   if (windowed !== null) return windowed;
-  // The Generate frame covers all locations — never report it as one location's number.
-  if (locationIds) return null;
+  // The Generate frame covers all locations and staff — never report it as one
+  // location's or one staff group's number.
+  if (locationIds || staffIds) return null;
 
   const text = await getReportFrameText(page);
   if (!text) return null;
@@ -545,7 +570,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
 // timePeriodStart from that broken frame — so the "MTD" fetch was really still
 // just today→tomorrow, a single day, not the 1st-of-month→today range it
 // claimed to be. Now takes both bounds explicitly so callers control the window.
-async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationIds = null) {
+async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
   );
@@ -563,6 +588,7 @@ async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationI
   settings.timePeriodStart = startStr;
   settings.timePeriodEndExclusive = endExclusiveStr;
   applyLocationIds(settings, locationIds, 'Util window');
+  applyStaffIds(settings, staffIds);
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -612,7 +638,7 @@ function completedMonthWindow(monthsAgo) {
   return { start: fmt(start), endExclusive: fmt(end) };
 }
 
-async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null, monthsAgo = 0, locationIds = null) {
+async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent = false, location = null, monthsAgo = 0, locationIds = null, staffIds = null) {
   console.log(`\n  [Utilization] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -650,11 +676,11 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   if (isCurrent) {
     const { monthStart, mtdEnd, fullMonthEnd } = currentMonthWindows();
     const [fullMonth, mtd] = await Promise.all([
-      fetchUtilizationWindow(page, monthStart, fullMonthEnd, locationIds).catch(e => {
+      fetchUtilizationWindow(page, monthStart, fullMonthEnd, locationIds, staffIds).catch(e => {
         console.warn('  [Util window] full-month error:', e.message);
         return null;
       }),
-      fetchUtilizationWindow(page, monthStart, mtdEnd, locationIds).catch(e => {
+      fetchUtilizationWindow(page, monthStart, mtdEnd, locationIds, staffIds).catch(e => {
         console.warn('  [Util window] MTD error:', e.message);
         return null;
       }),
@@ -662,7 +688,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     if (mtd !== null) {
       // % booked stays MTD, but Avail hrs shows the full month's scheduled
       // availability (incl. future days), not just hours available through today.
-      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? (locationIds ? null : frameAvail) };
+      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? ((locationIds || staffIds) ? null : frameAvail) };
     }
   }
 
@@ -672,7 +698,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
   // calendar month instead of reading that frame directly.
   if (!isCurrent) {
     const { start, endExclusive } = completedMonthWindow(monthsAgo);
-    const windowed = await fetchUtilizationWindow(page, start, endExclusive, locationIds).catch(e => {
+    const windowed = await fetchUtilizationWindow(page, start, endExclusive, locationIds, staffIds).catch(e => {
       console.warn('  [Util window] completed-month error:', e.message);
       return null;
     });
@@ -681,7 +707,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
     }
   }
 
-  if (locationIds) return null; // Generate frame is all-locations, see fetchSales
+  if (locationIds || staffIds) return null; // Generate frame is all-locations/staff, see fetchSales
   if (!frameRows) {
     console.warn(`  [Utilization] Staff rows not found. Lines: ${frameText ? frameText.split('\n').slice(0, 8).join(' | ') : 'n/a'}`);
     return null;
@@ -707,7 +733,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
 // After generating the single-month retention report (to capture iframe URL+settings),
 // open a second page with explicit start/end dates for a 60-day rolling window.
 // Anchor: today for current month, last day of month for completed months.
-async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds = null) {
+async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/') && f.url().includes('/html')
   );
@@ -725,6 +751,7 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds
   settings.timePeriodStart         = startStr;
   settings.timePeriodEndExclusive  = endExclusiveStr;
   applyLocationIds(settings, locationIds, 'Retention 60d');
+  applyStaffIds(settings, staffIds);
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
@@ -740,7 +767,7 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds
   }
 }
 
-async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null, locationIds = null) {
+async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null, locationIds = null, staffIds = null) {
   console.log(`\n  [Retention] ${monthOption}${location ? ` [${location}]` : ''}`);
 
   await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
@@ -770,11 +797,11 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   const startDate         = new Date(targetDate.getFullYear(), quarterStartMonth, 1);
   const endDate           = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
 
-  const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate), locationIds).catch(e => {
+  const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate), locationIds, staffIds).catch(e => {
     console.warn('  [Retention 60d] error, falling back to single month:', e.message);
     return null;
   });
-  if (!windowText && locationIds) return null; // Generate frame is all-locations, see fetchSales
+  if (!windowText && (locationIds || staffIds)) return null; // Generate frame is all-locations/staff, see fetchSales
   const text = windowText || await getReportFrameText(page);
   if (!text) return null;
 
@@ -805,13 +832,11 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
 
 // ── Account scraper ───────────────────────────────────────────────────────────
 
-async function scrapeAccount(browser, account, cache) {
+// New browser context logged into an account's Mangomint via its cookie secret.
+// Returns { context, page, base }; throws if the cookies have expired.
+async function openAccount(browser, account) {
   const raw = process.env[account.cookieEnv];
   if (!raw) throw new Error(`${account.cookieEnv} not set`);
-
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`Scraping: ${account.label}`);
-  console.log('='.repeat(50));
 
   const context = await browser.newContext({
     viewport:   { width: 1440, height: 900 },
@@ -838,6 +863,15 @@ async function scrapeAccount(browser, account, cache) {
     throw new Error(`${account.cookieEnv} expired — refresh the GitHub secret`);
   }
   console.log(`Logged in: ${page.url()}`);
+  return { context, page, base };
+}
+
+async function scrapeAccount(browser, account, cache) {
+  console.log(`\n${'='.repeat(50)}`);
+  console.log(`Scraping: ${account.label}`);
+  console.log('='.repeat(50));
+
+  const { context, page, base } = await openAccount(browser, account);
 
   const monthsBack = account.monthsBack || 3;
   const periods = Array.from({ length: monthsBack }, (_, monthsAgo) => ({
@@ -849,6 +883,7 @@ async function scrapeAccount(browser, account, cache) {
   const cacheKey = account.locationKey || account.key;
   const location = account.location || null;
   const locationIds = account.locationIds || null;
+  const staffIds = account.staffIds || null;
   const bizCache = cache.businesses[cacheKey] || (cache.businesses[cacheKey] = { periods: {} });
 
   for (const p of periods) {
@@ -870,11 +905,11 @@ async function scrapeAccount(browser, account, cache) {
       continue;
     }
 
-    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo, locationIds), 'Sales');
-    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo, locationIds), 'Util');
+    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo, locationIds, staffIds), 'Sales');
+    const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo, locationIds, staffIds), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
-    const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location, locationIds), 'Ret');
+    const retResult      = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location, locationIds, staffIds), 'Ret');
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
@@ -901,6 +936,45 @@ async function scrapeAccount(browser, account, cache) {
   return { key: cacheKey, label: account.label, periods: results };
 }
 
+// ── Staff classification check ──────────────────────────────────────────────
+// Anyone with booked hours on the dashboard's window who isn't in staffGroups.js
+// silently falls out of both Esti and LMT columns. List them so the owner
+// dashboard can flag it (a new hire is the usual cause).
+
+async function findUnclassifiedStaff(browser, account, knownNames) {
+  const { context, page, base } = await openAccount(browser, account);
+  try {
+    await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
+    await settle(page, 3000);
+    await dismissOverlays(page);
+    await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
+    await settle(page, 3000);
+    await selectAllStaff(page, null);
+    await dismissOverlays(page);
+    await page.getByText('Generate', { exact: true }).first().click();
+    await settle(page, 7000);
+
+    const frame = page.frames().find(
+      f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
+    );
+    if (!frame) throw new Error('util iframe not found');
+    const url = new URL(frame.url());
+    const settings = JSON.parse(url.searchParams.get('settings') || '{}');
+    settings.timePeriodStart        = completedMonthWindow(account.monthsBack - 1).start;
+    settings.timePeriodEndExclusive = currentMonthWindows().mtdEnd;
+    url.searchParams.set('settings', JSON.stringify(settings));
+
+    const p = await context.newPage();
+    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const rows = parseStaffAvailBooked(await p.evaluate(() => document.body?.innerText || '')) || [];
+    console.log(`  [Staff check] ${settings.timePeriodStart}..${settings.timePeriodEndExclusive}: ${rows.length} staff rows`);
+    return rows.filter(r => r.booked >= 1 && !knownNames.has(r.name)).map(r => r.name);
+  } finally {
+    await context.close();
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -915,7 +989,9 @@ async function main() {
   const cache = loadCache();
   const businessData  = [];
   const locationData  = [];
+  const groupData     = [];
   const errors = [];
+  let unclassified = [];
 
   const nullPeriods = (monthsBack = 3) => Array.from({ length: monthsBack }, (_, monthsAgo) => ({
     label: monthLabel(monthsAgo), monthsAgo, isCurrent: monthsAgo === 0,
@@ -942,19 +1018,73 @@ async function main() {
         locationData.push({ key: account.locationKey, label: account.label, error: err.message, periods: nullPeriods(account.monthsBack) });
       }
     }
+
+    for (const account of STAFF_GROUP_ACCOUNTS) {
+      try {
+        groupData.push(await scrapeAccount(browser, account, cache));
+      } catch (err) {
+        console.error(`ERROR scraping ${account.label}: ${err.message}`);
+        errors.push({ account: `Skin & Sage ${account.label}`, error: err.message });
+        groupData.push({ key: account.locationKey, label: account.label, error: err.message, periods: nullPeriods(account.monthsBack) });
+      }
+    }
+
+    try {
+      unclassified = await findUnclassifiedStaff(browser, ACCOUNTS.find(a => a.key === 'skinsage'),
+        new Set(SKINSAGE_STAFF.map(s => s.name)));
+      if (unclassified.length) console.warn(`  [Staff check] not in staffGroups.js: ${unclassified.join(', ')}`);
+    } catch (err) {
+      console.error(`  [Staff check] failed: ${err.message}`);
+    }
   } finally {
     await browser.close();
   }
 
   saveCache(cache);
 
+  const generatedAt = new Date().toISOString();
+  const notices = unclassified.length
+    ? [`Skin &amp; Sage team page: <b>${unclassified.join(', ')}</b> had booked hours but isn't assigned Esti or LMT in src/staffGroups.js — left out of both columns until added.`]
+    : [];
+
   const html = generateHtml({
-    businesses: businessData, locations: locationData, generatedAt: new Date().toISOString(), errors,
+    businesses: businessData, locations: locationData, generatedAt, errors, notices,
   });
 
   const outFile = process.env.DASHBOARD_OUT || path.join(__dirname, '..', 'dashboard.html');
   fs.writeFileSync(outFile, html, 'utf8');
   console.log(`\nDashboard written: ${outFile}`);
+
+  // Employee pages. Skin & Sage: one column per role. WAXON: business total +
+  // each location, reusing the numbers already scraped for the owner dashboard.
+  const byKey = Object.fromEntries([...businessData, ...locationData, ...groupData].map(d => [d.key, d]));
+  const missing = (key, label) => byKey[key] || { key, label, error: 'No data', periods: [] };
+  const teamPages = [
+    {
+      out: process.env.TEAM_SKINSAGE_OUT || path.join(__dirname, '..', 'team-skinsage.html'),
+      title: 'Skin &amp; Sage Team',
+      columns: 2,
+      panels: [
+        { kind: 'business', data: missing('skinsage_esti', 'Estheticians') },
+        { kind: 'business', data: missing('skinsage_lmt',  'Massage Therapists') },
+      ],
+      note: 'Each column counts only that role’s providers, at both locations · a sale or client shared by an Esti and an LMT counts in both columns',
+    },
+    {
+      out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),
+      title: 'WAXON Team',
+      columns: 3,
+      panels: [
+        { kind: 'business', data: { ...missing('waxon', 'WAXON'), label: 'All Locations' } },
+        { kind: 'location', data: { ...missing('waxon_belltown', 'Belltown'), label: 'Belltown' } },
+        { kind: 'location', data: { ...missing('waxon_capitol_hill', 'Capitol Hill'), label: 'Capitol Hill' } },
+      ],
+    },
+  ];
+  for (const t of teamPages) {
+    fs.writeFileSync(t.out, generateTeamHtml({ ...t, generatedAt }), 'utf8');
+    console.log(`Team page written: ${t.out}`);
+  }
 
   if (errors.length > 0) {
     console.error(`\n${errors.length} account(s) had errors`);

@@ -13,10 +13,15 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 (was 30): the Skin & Sage Esti/LMT team page adds two more scrapes. Normal
+    # nights only re-fetch the current month (~3 min extra); the first run after a
+    # cache reset fetches all four months for both groups.
+    timeout-minutes: 45
     env:
       SCREENSHOT_DIR: /tmp/kpi-screenshots
       DASHBOARD_OUT: dashboard.html
+      TEAM_SKINSAGE_OUT: team-skinsage.html
+      TEAM_WAXON_OUT: team-waxon.html
       SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
       WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
 
@@ -70,10 +75,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kpi-dashboard
-          path: dashboard.html
+          path: |
+            dashboard.html
+            team-skinsage.html
+            team-waxon.html
           retention-days: 30
           if-no-files-found: warn
 
+      # dist layout (served by GitHub Pages):
+      #   index.html           owner dashboard
+      #   skinsage/index.html  Skin & Sage employee page (Esti vs LMT)
+      #   waxon/index.html     WAXON employee page
       - name: Push dashboard to dist branch
         if: always()
         run: |
@@ -82,6 +94,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           cp dashboard.html /tmp/dashboard.html
           rm -f dashboard.html
+          for t in skinsage waxon; do
+            [ -f team-$t.html ] && mv team-$t.html /tmp/team-$t.html
+          done
           git fetch origin
           if git show-ref --quiet refs/remotes/origin/dist; then
             git checkout dist
@@ -92,6 +107,13 @@ jobs:
           cp /tmp/dashboard.html index.html
           rm -f dashboard.html
           git add index.html
+          for t in skinsage waxon; do
+            if [ -f /tmp/team-$t.html ]; then
+              mkdir -p $t
+              cp /tmp/team-$t.html $t/index.html
+              git add $t/index.html
+            fi
+          done
           git rm --ignore-unmatch --quiet dashboard.html
           git diff --staged --quiet || git commit -m "Update dashboard $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           git push origin dist

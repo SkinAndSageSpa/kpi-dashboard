@@ -273,7 +273,9 @@ function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false })
     </div>`;
 }
 
-function businessPanel(biz) {
+const OWNER_ERROR_TEXT = 'Cookies expired — refresh the GitHub secret to restore data.';
+
+function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
   const { label, periods, error } = biz;
 
   if (error) {
@@ -282,7 +284,7 @@ function businessPanel(biz) {
         <div class="biz-header">
           <div class="biz-name">${label}</div>
         </div>
-        <div class="error-body">Cookies expired — refresh the GitHub secret to restore data.</div>
+        <div class="error-body">${errorText}</div>
       </div>`;
   }
 
@@ -348,12 +350,12 @@ function businessPanel(biz) {
     </div>`;
 }
 
-function locationPanel(loc) {
+function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
   if (loc.error) {
     return `
       <div class="loc-panel error-panel">
         <div class="biz-header"><div class="biz-name">${loc.label}</div></div>
-        <div class="error-body">Cookies expired — refresh the GitHub secret to restore data.</div>
+        <div class="error-body">${errorText}</div>
       </div>`;
   }
 
@@ -417,22 +419,7 @@ ${columns.map(c => c.render()).join('\n')}
 </div>`;
 }
 
-function generateHtml({ businesses, locations = [], generatedAt, errors }) {
-  const panels = businesses.map(businessPanel).join('\n');
-
-  const errorBanner = errors.length > 0
-    ? `<div class="error-banner">${errors.map(e => `<b>${e.account}</b> unavailable — cookies need refresh`).join(' · ')}</div>`
-    : '';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Business Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+const STYLES = `*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
   --bg:      #fff9f7;
@@ -698,7 +685,42 @@ footer {
   color: var(--muted);
   flex-shrink: 0;
 }
-</style>
+`;
+
+// Extra rules for the employee pages only (owner page never uses these classes).
+const TEAM_STYLES = `
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+  gap: 14px;
+}
+.team-note {
+  margin-top: 4px;
+}
+@media (max-width: 760px) {
+  body { padding: 12px 16px; }
+  .team-grid { grid-template-columns: minmax(0, 1fr); }
+  header { flex-wrap: wrap; gap: 4px; }
+}
+`;
+
+function generateHtml({ businesses, locations = [], generatedAt, errors, notices = [] }) {
+  const panels = businesses.map(businessPanel).join('\n');
+
+  const errorBanner = errors.length > 0
+    ? `<div class="error-banner">${errors.map(e => `<b>${e.account}</b> unavailable — cookies need refresh`).join(' · ')}</div>`
+    : '';
+  const noticeBanner = notices.map(n => `<div class="error-banner">${n}</div>`).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Business Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+${STYLES}</style>
 </head>
 <body>
 
@@ -711,6 +733,7 @@ footer {
 </header>
 
 ${errorBanner}
+${noticeBanner}
 
 <div class="dashboard">
 ${panels}
@@ -814,4 +837,46 @@ async function triggerRefresh(btn) {
 </html>`;
 }
 
-module.exports = { generateHtml };
+const TEAM_ERROR_TEXT = 'Numbers unavailable right now — check back after the next nightly update.';
+
+// Employee-facing page: one business's panels side by side, no refresh button
+// (that needs a GitHub token) and no cross-business data.
+//   panels: [{ kind: 'business' | 'location', data }]
+function generateTeamHtml({ title, columns, panels, note = '', generatedAt }) {
+  const rendered = panels.map(({ kind, data }) =>
+    kind === 'location' ? locationPanel(data, TEAM_ERROR_TEXT) : businessPanel(data, TEAM_ERROR_TEXT)
+  ).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+${STYLES}
+${TEAM_STYLES}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>${title}</h1>
+  <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
+</header>
+
+<div class="team-grid" style="--cols:${columns}">
+${rendered}
+</div>
+
+<footer>
+  ${note ? `<div class="team-note">${note}</div>` : ''}
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
+</footer>
+
+</body>
+</html>`;
+}
+
+module.exports = { generateHtml, generateTeamHtml };
