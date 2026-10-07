@@ -716,7 +716,7 @@ const TEAM_STYLES = `
   padding: 12px 16px;
 }
 .bonus-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.bonus-label { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.bonus-label { font-size: 15px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text); }
 .bonus-amount { font-family: var(--serif); font-weight: 300; font-size: 26px; line-height: 1; }
 .bonus-amount small { font-family: var(--sans); font-size: 11px; color: var(--muted); margin-left: 4px; }
 .bonus-goals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
