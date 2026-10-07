@@ -898,7 +898,7 @@ function viewSeries(periods, view) {
     series: [...thisMonths, lastPoint],
     head:   quarterPoint(thisMonths, `Q${cur.q}`),
     prior:  lastPoint,
-    tag:    'qtd',
+    tag:    `Q${cur.q}`, // headline tag names the current quarter, e.g. "Q4"
   };
 }
 
