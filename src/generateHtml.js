@@ -705,8 +705,28 @@ const TEAM_STYLES = `
 .team-note {
   margin-top: 4px;
 }
+.bonus {
+  max-width: 640px;
+  margin: 0 auto 14px;
+  background: var(--surface);
+  border-radius: var(--r);
+  box-shadow: 0 1px 8px rgba(60,30,24,.07), 0 0 0 1px var(--border);
+  padding: 12px 16px;
+}
+.bonus-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bonus-label { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.bonus-amount { font-family: var(--serif); font-weight: 300; font-size: 26px; line-height: 1; }
+.bonus-amount small { font-family: var(--sans); font-size: 11px; color: var(--muted); margin-left: 4px; }
+.bonus-goals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.goal { border-radius: 8px; padding: 6px 8px; font-size: 11px; line-height: 1.35; }
+.goal b { display: block; font-weight: 600; }
+.goal.met     { background: var(--green-bg); color: var(--green); }
+.goal.missed  { background: var(--rose-bg);  color: var(--rose); }
+.goal.pending { background: var(--faint);    color: var(--muted); }
+.bonus-note { margin-top: 8px; font-size: 10px; color: var(--muted); }
 @media (max-width: 760px) {
   body { padding: 12px 16px; }
+  .bonus-goals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .team-grid { grid-template-columns: minmax(0, 1fr); }
   header { flex-wrap: wrap; gap: 4px; }
 }
@@ -965,10 +985,51 @@ function managerPanel({ data, supply = false }, view) {
     </div>`;
 }
 
+// Studio manager's monthly bonus (WAXON): perGoal $ for each goal met this month
+// vs last month. "Projected" = this month to date against last month's final
+// figure, using exactly the values the cards show. Goal rules (Morgan, 2026-10-07):
+//   retention      — increase over prior month          (cur >  prior)
+//   product/sale   — increase over prior month          (cur >  prior)
+//   supply cost %  — reduction from prior month         (cur <  prior)
+//   bookable hours — maintain or increase               (cur >= prior)
+// A goal with a missing figure (e.g. this month's supply cost not in the sheet
+// yet) is "pending" — neither counted nor treated as missed.
+function bonusBanner(periods, perGoal) {
+  const cur = periods[0] || {}, prior = periods[1] || {};
+  const pct0 = v => Math.round(v) + '%';
+  const goals = [
+    { name: 'Client retention',    k: 'retention',      test: (c, p) => c > p,  fmt: pct0,      verb: 'increase' },
+    { name: 'Product / service',   k: 'productPerSale', test: (c, p) => c > p,  fmt: dollars2,  verb: 'increase' },
+    { name: 'Supply costs',        k: 'supplyPct',      test: (c, p) => c < p,  fmt: v => v.toFixed(1) + '%', verb: 'reduction' },
+    { name: 'Bookable hours',      k: 'availableHours', test: (c, p) => c >= p, fmt: v => Math.round(v).toLocaleString('en-US') + 'h', verb: 'maintain' },
+  ].map(g => {
+    const c = cur[g.k], p = prior[g.k];
+    const known = c !== null && c !== undefined && p !== null && p !== undefined;
+    const status = !known ? 'pending' : g.test(c, p) ? 'met' : 'missed';
+    const detail = known ? `${g.fmt(c)} vs ${g.fmt(p)}` : (c === null || c === undefined ? 'awaiting this month' : 'no prior month');
+    return { ...g, status, detail };
+  });
+  const earned  = goals.filter(g => g.status === 'met').length * perGoal;
+  const pending = goals.filter(g => g.status === 'pending').length * perGoal;
+  const max     = goals.length * perGoal;
+  const label   = { met: '✓ on track', missed: '✗ not yet', pending: '… pending' };
+  return `
+<div class="bonus">
+  <div class="bonus-top">
+    <span class="bonus-label">Projected ${monthAbbrev(cur.label || '')} manager bonus</span>
+    <span class="bonus-amount">$${earned}<small>of $${max}</small></span>
+  </div>
+  <div class="bonus-goals">
+    ${goals.map(g => `<div class="goal ${g.status}"><b>${g.name}</b>${label[g.status]} · ${g.detail}</div>`).join('\n    ')}
+  </div>
+  <div class="bonus-note">$${perGoal} per goal · month to date vs last month · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · $${pending} pending data` : ''}</div>
+</div>`;
+}
+
 // Manager-facing page: one business's panels side by side, no refresh button
 // (that needs a GitHub token) and no cross-business data.
 //   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
-function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt }) {
+function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null }) {
   const rendered = panels.map(pnl => managerPanel(pnl, view)).join('\n');
   const period = view === 'quarterly' ? 'quarter' : 'month';
 
@@ -990,6 +1051,8 @@ ${TEAM_STYLES}
   <h1>${title}</h1>
   <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
 </header>
+
+${bonusPerGoal && panels[0]?.data?.periods?.length ? bonusBanner(panels[0].data.periods, bonusPerGoal) : ''}
 
 <div class="team-grid${columns === 1 ? ' single' : ''}" style="--cols:${columns}">
 ${rendered}

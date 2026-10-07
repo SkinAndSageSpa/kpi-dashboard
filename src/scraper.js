@@ -1254,6 +1254,7 @@ async function main() {
         { data: withSupply(missing('waxon', 'WAXON'), 'waxon'), supply: true },
       ],
       note: 'Monthly goals · Belltown and Capitol Hill combined · headline = month to date',
+      bonusPerGoal: 125, // studio manager: up to $500/mo, $125 per goal met vs prior month
     },
   ];
   for (const t of teamPages) {
