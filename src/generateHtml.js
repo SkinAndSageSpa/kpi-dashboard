@@ -67,11 +67,14 @@ const HEALTH_FILL = {
 
 // Full-width 3-bar chart. Oldest month left, current month right.
 // projectedTop: extra height to stack on the current bar (projected - actual sales).
-function bigChart(values, labels, health, fmtBar, projectedTop = null) {
+// minSlots: lay out at least this many bar slots (bars centered) so a chart with
+// only one or two bars isn't stretched to giant bars by width:100%.
+function bigChart(values, labels, health, fmtBar, projectedTop = null, minSlots = 0) {
   const n = values.length;
+  const slots = Math.max(n, minSlots);
   const pad = 8;
   const barW = 46, gap = 12;
-  const W = n * barW + (n - 1) * gap + pad * 2, H = 100;
+  const W = slots * barW + (slots - 1) * gap + pad * 2, H = 100;
   const maxBarH = 64;
   const botY = 80;
   const labY = 95;
@@ -83,7 +86,7 @@ function bigChart(values, labels, health, fmtBar, projectedTop = null) {
   }
   const maxVal = Math.max(...allVals, 1);
 
-  const startX = pad;
+  const startX = pad + (slots - n) * (barW + gap) / 2;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = values.map((v, i) => {
@@ -197,12 +200,13 @@ function utilizationChart(periods, health) {
 // Retention bars (combined%) with new-client-% dot + label below the dot.
 // Dot Y axis uses 55% of bar height max so dots sit in lower bar area,
 // clear of the combined-% label at the top.
-function retentionChart(periods, health) {
+function retentionChart(periods, health, minSlots = 0) {
   const n = periods.length;
+  const slots = Math.max(n, minSlots);
   const pad = 8;
   const legendW = 68;
   const barW = 46, gap = 12;
-  const W = legendW + n * barW + (n - 1) * gap + pad * 2, H = 108;
+  const W = legendW + slots * barW + (slots - 1) * gap + pad * 2, H = 108;
   const maxBarH = 62;
   const dotMaxH = Math.round(maxBarH * 0.5);
   const botY = 82;
@@ -213,7 +217,7 @@ function retentionChart(periods, health) {
   const allNew   = periods.map(p => p?.newRetPct).filter(v => v !== null && v > 0);
   const maxNew   = Math.max(...allNew, 1);
 
-  const startX = legendW + pad;
+  const startX = legendW + pad + (slots - n) * (barW + gap) / 2;
   const curFill = HEALTH_FILL[health] || HEALTH_FILL.neutral;
 
   const els = periods.map((p, i) => {
@@ -260,8 +264,8 @@ function retentionChart(periods, health) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
 
-function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false }) {
-  const mtdTag = mtd ? '<span class="mtd-tag">mtd</span>' : '';
+function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false, tag = mtd ? 'mtd' : '' }) {
+  const mtdTag = tag ? `<span class="mtd-tag">${tag}</span>` : '';
   return `
     <div class="kpi-card ${health}">
       <div class="kpi-card-top">
@@ -839,13 +843,132 @@ async function triggerRefresh(btn) {
 
 const TEAM_ERROR_TEXT = 'Numbers unavailable right now — check back after the next nightly update.';
 
-// Employee-facing page: one business's panels side by side, no refresh button
+// ── Manager pages ────────────────────────────────────────────────────────────
+// KPIs: Client Retention, Product Sales per Service (avg product $ per sale),
+// Supply Cost % (accountant's sheet; lower is better), Bookable Hours (available hrs).
+//
+// Monthly view (WAXON): one bar per month, headline = current month to date.
+// Quarterly view (Skin & Sage): one bar for last quarter, then one bar per month of
+// this quarter; headline = quarter to date. Quarter figures:
+//   retention      → the quarter's latest month (its window already runs from the
+//                    quarter start, so that *is* the quarter-to-date retention)
+//   product/sale   → weighted by # sales
+//   bookable hours → monthly average
+//   supply cost %  → average of the months in the sheet
+
+function quarterOfLabel(label) {
+  const i = MONTH_NAMES.findIndex(m => (label || '').startsWith(m));
+  const year = parseInt((label || '').slice(-4), 10);
+  return i < 0 ? null : { q: Math.floor(i / 3) + 1, year };
+}
+
+const mean = xs => { const v = xs.filter(x => x !== null && x !== undefined); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+
+// Aggregate a set of months (newest first) into one quarter-level point.
+function quarterPoint(months, label) {
+  const withPps = months.filter(m => m.productPerSale !== null && m.productPerSale !== undefined && m.productSalesCount);
+  const ppsN    = withPps.reduce((a, m) => a + m.productSalesCount, 0);
+  const latestRet = months.find(m => m.retention !== null && m.retention !== undefined);
+  return {
+    label,
+    retention:      latestRet?.retention ?? null,
+    newRetPct:      latestRet?.newRetPct ?? null,
+    productPerSale: ppsN ? withPps.reduce((a, m) => a + m.productPerSale * m.productSalesCount, 0) / ppsN : mean(months.map(m => m.productPerSale)),
+    availableHours: mean(months.map(m => m.availableHours)),
+    supplyPct:      mean(months.map(m => m.supplyPct)),
+  };
+}
+
+// Returns { series (newest first, for the charts), head (headline point), prior (comparison point), tag }.
+function viewSeries(periods, view) {
+  if (view !== 'quarterly') {
+    return { series: periods, head: periods[0] || {}, prior: periods[1] || {}, tag: 'mtd' };
+  }
+  const cur = quarterOfLabel(periods[0]?.label);
+  if (!cur) return { series: periods, head: periods[0] || {}, prior: periods[1] || {}, tag: 'mtd' };
+  const prevQ = cur.q === 1 ? { q: 4, year: cur.year - 1 } : { q: cur.q - 1, year: cur.year };
+  const inQ = (p, q) => { const x = quarterOfLabel(p.label); return x && x.q === q.q && x.year === q.year; };
+  const thisMonths = periods.filter(p => inQ(p, cur));
+  const lastMonths = periods.filter(p => inQ(p, prevQ));
+  const lastPoint  = quarterPoint(lastMonths, `Q${prevQ.q}`);
+  return {
+    series: [...thisMonths, lastPoint],
+    head:   quarterPoint(thisMonths, `Q${cur.q}`),
+    prior:  lastPoint,
+    tag:    'qtd',
+  };
+}
+
+const dollars2 = v => '$' + v.toFixed(2);
+const CHART_SLOTS = 4; // max bars on either view (4 months, or last quarter + 3 months)
+
+function managerPanel({ data, supply = false }, view) {
+  if (!data || data.error) {
+    return `
+      <div class="biz-panel error-panel">
+        <div class="biz-header"><div class="biz-name">${data?.label || ''}</div></div>
+        <div class="error-body">${TEAM_ERROR_TEXT}</div>
+      </div>`;
+  }
+  const { series, head, prior, tag } = viewSeries(data.periods || [], view);
+  const labels = series.map(p => p?.label);
+  const val = k => series.map(p => p?.[k] ?? null);
+
+  const rh = trendHealthPp(head.retention ?? null, prior.retention ?? null);
+  const retCard = kpiCard({
+    label: 'Client Retention', health: rh, tag,
+    currentDisplay: head.retention === null || head.retention === undefined ? '—' : Math.round(head.retention) + '%',
+    chart: retentionChart(series, rh, CHART_SLOTS),
+  });
+
+  const ph = trendHealthSales(head.productPerSale ?? null, prior.productPerSale ?? null);
+  const ppsCard = kpiCard({
+    label: 'Product Sales / Service', health: ph, tag,
+    currentDisplay: head.productPerSale === null || head.productPerSale === undefined ? '—' : dollars2(head.productPerSale),
+    chart: bigChart(val('productPerSale'), labels, ph, dollars2, null, CHART_SLOTS),
+  });
+
+  // Lower supply cost is better: green when it drops by more than 1pp.
+  const sh = trendHealthPp(prior.supplyPct ?? null, head.supplyPct ?? null, 1);
+  const supplyCard = supply ? kpiCard({
+    label: 'Supply Costs (% of sales)', health: sh, tag,
+    currentDisplay: head.supplyPct === null || head.supplyPct === undefined ? '—' : head.supplyPct.toFixed(1) + '%',
+    chart: bigChart(val('supplyPct'), labels, sh, v => Math.round(v) + '%', null, CHART_SLOTS),
+  }) : '';
+
+  const hh = trendHealthSales(head.availableHours ?? null, prior.availableHours ?? null);
+  const hoursCard = kpiCard({
+    label: 'Bookable Hours', health: hh, tag,
+    currentDisplay: head.availableHours === null || head.availableHours === undefined ? '—' : Math.round(head.availableHours).toLocaleString('en-US') + 'h',
+    chart: bigChart(val('availableHours'), labels, hh, v => Math.round(v) + 'h', null, CHART_SLOTS),
+  });
+
+  const signals = [rh, ph, supply ? sh : 'neutral', hh].filter(h => h !== 'neutral');
+  const overall = signals.includes('red') ? 'red' : signals.includes('amber') ? 'amber'
+    : signals.length > 0 ? 'green' : 'neutral';
+  const pill = { green: 'Thriving', amber: 'Watch', red: 'Needs Love', neutral: 'No Data' };
+
+  return `
+    <div class="biz-panel">
+      <div class="biz-header">
+        <div class="biz-name">${data.label}</div>
+        <div class="health-pill ${overall}">${pill[overall]}</div>
+      </div>
+      <div class="cards">
+        ${retCard}
+        ${ppsCard}
+        ${supplyCard}
+        ${hoursCard}
+      </div>
+    </div>`;
+}
+
+// Manager-facing page: one business's panels side by side, no refresh button
 // (that needs a GitHub token) and no cross-business data.
-//   panels: [{ kind: 'business' | 'location', data }]
-function generateTeamHtml({ title, columns, panels, note = '', generatedAt }) {
-  const rendered = panels.map(({ kind, data }) =>
-    kind === 'location' ? locationPanel(data, TEAM_ERROR_TEXT) : businessPanel(data, TEAM_ERROR_TEXT)
-  ).join('\n');
+//   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
+function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt }) {
+  const rendered = panels.map(pnl => managerPanel(pnl, view)).join('\n');
+  const period = view === 'quarterly' ? 'quarter' : 'month';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -872,7 +995,7 @@ ${rendered}
 
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
+  Client Retention = retained within 180 days &nbsp;·&nbsp; Product Sales / Service = avg product $ per sale &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)
 </footer>
 
 </body>

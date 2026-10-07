@@ -95,8 +95,12 @@ const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || '/tmp/kpi-screenshots';
 // panels show 2 historic + current — same fetch/calc code, just fewer months back.
 const ACCOUNTS = [
   { key: 'skinsage', label: 'Skin & Sage', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4 },
-  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4 },
+  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4, metrics: ['sales', 'util', 'ret', 'pps'] },
 ];
+
+// Metrics an account scrape fetches (default: the owner dashboard's three).
+// 'pps' = BI Sales "Avg Product Total Per Sale" — only the manager pages show it.
+const DEFAULT_METRICS = ['sales', 'util', 'ret'];
 
 // Per-location scrapes: same flow, but each report's settings URL gets its
 // locationIds overridden to exactly this location (see applyLocationIds).
@@ -115,8 +119,8 @@ const ACCOUNTS = [
 const LOCATION_ACCOUNTS = [
   { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna',    locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna',      locationIds: [1] },
   { key: 'skinsage', locationKey: 'skinsage_queenanne', label: 'Skin & Sage Queen Anne', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Queen Anne',   locationIds: [2], openedPeriod: '2026-09' },
-  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2] },
-  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1] },
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2], metrics: ['sales', 'util', 'ret', 'pps'] },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1], metrics: ['sales', 'util', 'ret', 'pps'] },
 ];
 
 // Per-role scrapes for the Skin & Sage employee page: same flow again, but each
@@ -127,8 +131,8 @@ const LOCATION_ACCOUNTS = [
 // utilization hours exactly, and to within ~0.3% (sales) / ~1% (retention clients)
 // since a sale or client shared by two providers counts for each of them.
 const STAFF_GROUP_ACCOUNTS = [
-  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, role: 'esti', staffIds: null },
-  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, role: 'lmt',  staffIds: null },
+  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 6, role: 'esti', staffIds: null, metrics: ['util', 'ret', 'pps'] },
+  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 6, role: 'lmt',  staffIds: null, metrics: ['util', 'ret', 'pps'] },
 ];
 
 // Narrow a harvested (all-locations) report settings object to one location.
@@ -833,6 +837,83 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   return { combined: retention, existingPct, newPct };
 }
 
+/**
+ * Business Intelligence: Sales → "Avg Product Total Per Sale" (manager pages'
+ * "Product Sales per Service"). Summary row:
+ *   Selected Staff Total | # Sales | Avg Product Total Per Sale | Avg Service Total Per Sale | Avg # of Products Per Sale
+ * Same harvest-then-rewrite flow as the other reports: Generate once (all staff,
+ * incl. archived), then reload with explicit dates/locations/staff. Also returns
+ * # Sales so quarter figures can be weighted correctly.
+ */
+async function fetchProductPerSale(page, base, monthsAgo, isCurrent, locationIds = null, staffIds = null) {
+  console.log(`\n  [Product/sale] ${monthLabel(monthsAgo)}`);
+  await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 3000);
+  await dismissOverlays(page);
+  await page.getByText('Business Intelligence: Sales', { exact: true }).first().click();
+  await settle(page, 3000);
+  await selectAllStaff(page, null);
+  await dismissOverlays(page);
+  await page.getByText('Generate', { exact: true }).first().click();
+  await settle(page, 7000);
+
+  const frame = page.frames().find(f => f.url().includes('/reports/business-intelligence/sales') && f.url().includes('/html'));
+  if (!frame) throw new Error('BI Sales iframe not found');
+  const url = new URL(frame.url());
+  const settings = JSON.parse(url.searchParams.get('settings') || '{}');
+  const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
+  settings.timePeriodStart        = win.start;
+  settings.timePeriodEndExclusive = win.endExclusive;
+  applyLocationIds(settings, locationIds, 'Product/sale');
+  applyStaffIds(settings, staffIds);
+  url.searchParams.set('settings', JSON.stringify(settings));
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const text = await p.evaluate(() => document.body?.innerText || '');
+    const line = text.split('\n').find(l => l.startsWith('Selected Staff Total\t'));
+    if (!line) { console.warn(`  [Product/sale] summary row not found. First lines: ${text.split('\n').slice(0, 4).join(' | ')}`); return null; }
+    const cols = parseRow(line);
+    const salesCount = parseInt(cols[1], 10) || 0;
+    const productPerSale = parseDollar(cols[2]);
+    console.log(`  [Product/sale] ${win.start}..${win.endExclusive}: ${cols[2]} over ${salesCount} sales`);
+    return { productPerSale, salesCount };
+  } finally {
+    await p.close();
+  }
+}
+
+// Supply Cost % comes from the accountant's Google Sheet ("Supply Cost % KPI"),
+// read through its CSV export (the sheet is link-shared, so no credentials).
+// Layout: row 1 = headers (blank, "Skin & Sage - Esti Team", "Skin & Sage - LMT Team",
+// "Waxon"); then one row per month labelled like "October 2026" with "36%" cells.
+// Returns { esti: { 'October 2026': 36 }, lmt: {...}, waxon: {...} }.
+const SUPPLY_SHEET_CSV = process.env.SUPPLY_SHEET_CSV ||
+  'https://docs.google.com/spreadsheets/d/1hkzoEyDnJXmyC7fPXsP62bm_M9qQs6XYVibkCkM4jJE/export?format=csv&gid=0';
+
+async function fetchSupplyCosts() {
+  const res = await fetch(SUPPLY_SHEET_CSV, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`supply sheet HTTP ${res.status}`);
+  const rows = (await res.text()).trim().split(/\r?\n/).map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')));
+  const header = rows[0] || [];
+  const colFor = re => header.findIndex(h => re.test(h));
+  const cols = { esti: colFor(/esti/i), lmt: colFor(/lmt/i), waxon: colFor(/wax/i) };
+  const out = { esti: {}, lmt: {}, waxon: {} };
+  for (const row of rows.slice(1)) {
+    const month = row[0];
+    if (!month) continue;
+    for (const [k, i] of Object.entries(cols)) {
+      if (i < 0) continue;
+      const v = parseFloat((row[i] || '').replace('%', ''));
+      if (!isNaN(v)) out[k][month] = v;
+    }
+  }
+  console.log(`[Supply] ${Object.keys(out.waxon).length} WAXON / ${Object.keys(out.esti).length} Esti / ${Object.keys(out.lmt).length} LMT months from sheet`);
+  return out;
+}
+
 // ── Account scraper ───────────────────────────────────────────────────────────
 
 // New browser context logged into an account's Mangomint via its cookie secret.
@@ -896,6 +977,7 @@ async function scrapeAccount(browser, account, cache) {
   const location = account.location || null;
   const locationIds = account.locationIds || null;
   const staffIds = account.staffIds || null;
+  const metrics = account.metrics || DEFAULT_METRICS;
   const bizCache = cache.businesses[cacheKey] || (cache.businesses[cacheKey] = { periods: {} });
 
   for (const p of periods) {
@@ -903,7 +985,8 @@ async function scrapeAccount(browser, account, cache) {
     const prefix = `${cacheKey}_${p.pickerLabel.replace(/\s/g, '_')}`;
     console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}")${location ? ` [${location}]` : ''} ──`);
 
-    if (!p.isCurrent && bizCache.periods[key]) {
+    // A month cached before 'pps' existed lacks productPerSale — refetch it once.
+    if (!p.isCurrent && bizCache.periods[key] && (!metrics.includes('pps') || 'productPerSale' in bizCache.periods[key])) {
       console.log(`  Using cached data for ${key}`);
       results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: false, ...bizCache.periods[key] });
       continue;
@@ -913,11 +996,13 @@ async function scrapeAccount(browser, account, cache) {
       console.log(`  Before ${account.label} opened (${account.openedPeriod}) — skipping`);
       results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent,
         sales: null, projectedSales: null, utilization: null, availableHours: null,
-        retention: null, existingRetPct: null, newRetPct: null });
+        retention: null, existingRetPct: null, newRetPct: null, productPerSale: null, productSalesCount: null });
       continue;
     }
 
-    const sales      = await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo, locationIds, staffIds), 'Sales');
+    const sales      = metrics.includes('sales')
+      ? await withRetry(() => fetchSales(page, base, p.pickerLabel, prefix, location, p.isCurrent, p.monthsAgo, locationIds, staffIds), 'Sales')
+      : null;
     const utilResult = await withRetry(() => fetchUtilization(page, base, p.pickerLabel, prefix, p.isCurrent, location, p.monthsAgo, locationIds, staffIds), 'Util');
     const utilization    = utilResult?.utilization ?? null;
     const availableHours = utilResult?.availableHours ?? null;
@@ -925,6 +1010,11 @@ async function scrapeAccount(browser, account, cache) {
     const retention      = retResult?.combined ?? null;
     const existingRetPct = retResult?.existingPct ?? null;
     const newRetPct      = retResult?.newPct ?? null;
+    const ppsResult      = metrics.includes('pps')
+      ? await withRetry(() => fetchProductPerSale(page, base, p.monthsAgo, p.isCurrent, locationIds, staffIds), 'Product/sale')
+      : null;
+    const productPerSale    = ppsResult?.productPerSale ?? null;
+    const productSalesCount = ppsResult?.salesCount ?? null;
 
     const daysElapsed = p.isCurrent ? dayOfMonth() : null;
     const totalDays   = p.isCurrent ? daysInMonth(0) : null;
@@ -932,13 +1022,15 @@ async function scrapeAccount(browser, account, cache) {
       ? Math.round((sales / daysElapsed) * totalDays)
       : null;
 
-    console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% ret=${retention}%`);
+    console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% avail=${availableHours}h ret=${retention}% product/sale=$${productPerSale}`);
 
     const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct };
+    if (metrics.includes('pps')) Object.assign(periodData, { productPerSale, productSalesCount });
     // Only cache a completed month once every metric actually came back —
     // otherwise a transient failure (e.g. a stuck overlay blocking a click)
     // gets baked in as permanent nulls until the cache schema version bumps.
-    const complete = sales !== null && utilization !== null && retention !== null;
+    const complete = (!metrics.includes('sales') || sales !== null) && utilization !== null && retention !== null
+      && (!metrics.includes('pps') || productPerSale !== null);
     if (!p.isCurrent && complete) bizCache.periods[key] = periodData;
 
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
@@ -1094,6 +1186,16 @@ async function main() {
 
   saveCache(cache);
 
+  let supply = { esti: {}, lmt: {}, waxon: {} };
+  try {
+    supply = await fetchSupplyCosts();
+  } catch (err) {
+    console.error(`[Supply] ${err.message}`);
+  }
+  const withSupply = (data, col) => data && data.periods
+    ? { ...data, periods: data.periods.map(p => ({ ...p, supplyPct: supply[col][p.label] ?? null })) }
+    : data;
+
   const generatedAt = new Date().toISOString();
   const notices = notCounted.length
     ? [`Skin &amp; Sage team page: <b>${notCounted.join(', ')}</b> had booked hours but no Signature Facial or massage services in Mangomint, so they're counted in neither the Esti nor the LMT column.`]
@@ -1107,8 +1209,10 @@ async function main() {
   fs.writeFileSync(outFile, html, 'utf8');
   console.log(`\nDashboard written: ${outFile}`);
 
-  // Employee pages. Skin & Sage: one column per role. WAXON: business total +
-  // each location, reusing the numbers already scraped for the owner dashboard.
+  // Manager pages. KPIs: Client Retention, Product Sales per Service, Supply Cost %
+  // (accountant's sheet), Bookable Hours. Skin & Sage: one column per role, quarterly
+  // view. WAXON: business total + each location, monthly view (supply cost is
+  // business-wide only, so it's shown on the All Locations panel).
   const byKey = Object.fromEntries([...businessData, ...locationData, ...groupData].map(d => [d.key, d]));
   const missing = (key, label) => byKey[key] || { key, label, error: 'No data', periods: [] };
   const teamPages = [
@@ -1116,21 +1220,24 @@ async function main() {
       out: process.env.TEAM_SKINSAGE_OUT || path.join(__dirname, '..', 'team-skinsage.html'),
       title: 'Skin &amp; Sage Team',
       columns: 2,
+      view: 'quarterly',
       panels: [
-        { kind: 'business', data: missing('skinsage_esti', 'Estheticians') },
-        { kind: 'business', data: missing('skinsage_lmt',  'Massage Therapists') },
+        { data: withSupply(missing('skinsage_esti', 'Estheticians'), 'esti'),      supply: true },
+        { data: withSupply(missing('skinsage_lmt',  'Massage Therapists'), 'lmt'), supply: true },
       ],
-      note: 'Each column counts only that role’s providers, at both locations · a sale or client shared by an Esti and an LMT counts in both columns',
+      note: 'Each column counts only that role’s providers, at both locations · Quarterly goals: last quarter, then each month this quarter · headline = quarter to date',
     },
     {
       out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),
       title: 'WAXON Team',
       columns: 3,
+      view: 'monthly',
       panels: [
-        { kind: 'business', data: { ...missing('waxon', 'WAXON'), label: 'All Locations' } },
-        { kind: 'location', data: { ...missing('waxon_belltown', 'Belltown'), label: 'Belltown' } },
-        { kind: 'location', data: { ...missing('waxon_capitol_hill', 'Capitol Hill'), label: 'Capitol Hill' } },
+        { data: withSupply({ ...missing('waxon', 'WAXON'), label: 'All Locations' }, 'waxon'), supply: true },
+        { data: { ...missing('waxon_belltown', 'Belltown'), label: 'Belltown' } },
+        { data: { ...missing('waxon_capitol_hill', 'Capitol Hill'), label: 'Capitol Hill' } },
       ],
+      note: 'Monthly goals · headline = month to date · supply cost is tracked for WAXON as a whole',
     },
   ];
   for (const t of teamPages) {

@@ -13,10 +13,10 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # 45 (was 30): the Skin & Sage Esti/LMT team page adds two more scrapes. Normal
-    # nights only re-fetch the current month (~3 min extra); the first run after a
-    # cache reset fetches all four months for both groups.
-    timeout-minutes: 45
+    # 60 (was 30): the manager pages add Esti/LMT scrapes and BI Sales fetches.
+    # Normal nights only re-fetch the current month; the first run after a cache
+    # reset backfills 6 months for both role groups.
+    timeout-minutes: 60
     env:
       SCREENSHOT_DIR: /tmp/kpi-screenshots
       DASHBOARD_OUT: dashboard.html
