@@ -24,6 +24,9 @@ jobs:
       TEAM_WAXON_OUT: team-waxon.html
       SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
       WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+      # Owner dashboard password (src/lockPage.js). Unset → owner page is replaced
+      # by a "not configured" page rather than published unencrypted.
+      DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +66,12 @@ jobs:
       - name: Scrape KPI data
         run: node src/scraper.js
 
+      # The repo (and so its artifacts, dist branch and Pages site) is public:
+      # encrypt the owner dashboard before it's uploaded or pushed anywhere.
+      - name: Lock owner dashboard
+        if: always()
+        run: node src/lockPage.js dashboard.html
+
       - name: Save KPI data cache
         if: always()
         uses: actions/cache/save@v4
@@ -83,9 +92,11 @@ jobs:
           if-no-files-found: warn
 
       # dist layout (served by GitHub Pages):
-      #   index.html           owner dashboard
-      #   skinsage/index.html  Skin & Sage employee page (Esti vs LMT)
-      #   waxon/index.html     WAXON employee page
+      #   index.html           owner dashboard (password-locked, see lockPage.js)
+      #   skinsage/index.html  Skin & Sage manager page (Esti vs LMT, quarterly)
+      #   waxon/index.html     WAXON manager page (monthly)
+      # Rebuilt as a single fresh commit and force-pushed every run, so the public
+      # branch never keeps a history of past (or pre-lock, unencrypted) dashboards.
       - name: Push dashboard to dist branch
         if: always()
         run: |
@@ -97,15 +108,9 @@ jobs:
           for t in skinsage waxon; do
             [ -f team-$t.html ] && mv team-$t.html /tmp/team-$t.html
           done
-          git fetch origin
-          if git show-ref --quiet refs/remotes/origin/dist; then
-            git checkout dist
-          else
-            git checkout --orphan dist
-            git rm -rf . --quiet 2>/dev/null || true
-          fi
+          git checkout --orphan dist-build
+          git rm -rf . --quiet 2>/dev/null || true
           cp /tmp/dashboard.html index.html
-          rm -f dashboard.html
           git add index.html
           for t in skinsage waxon; do
             if [ -f /tmp/team-$t.html ]; then
@@ -114,9 +119,8 @@ jobs:
               git add $t/index.html
             fi
           done
-          git rm --ignore-unmatch --quiet dashboard.html
-          git diff --staged --quiet || git commit -m "Update dashboard $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          git push origin dist
+          git commit -q -m "Update dashboard $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git push -f origin dist-build:dist
 
       - name: Upload screenshots (on failure)
         if: failure() || cancelled()
