@@ -116,5 +116,35 @@ async function settle(page, extra = 3000) {
   const counts = rows.reduce((m, r) => (m[r.status === 200 ? (r.enabledCount ? 'withServices' : 'noServices') : `http${r.status}`] = (m[r.status === 200 ? (r.enabledCount ? 'withServices' : 'noServices') : `http${r.status}`] || 0) + 1, m), {});
   console.log('\nSummary:', JSON.stringify(counts));
 
+  // Fallback for archived staff: which services did they actually perform?
+  for (const reportName of ['Service Sales', 'Service & Product Sales By Staff']) {
+    await page.goto(`${BASE}/reports`, { waitUntil: 'domcontentloaded' });
+    await settle(page, 3000);
+    await page.getByText(reportName, { exact: true }).first().click();
+    await settle(page, 3000);
+    await page.getByText('Generate', { exact: true }).first().click();
+    await settle(page, 7000);
+    const f = page.frames().find(fr => fr.url().includes('/api/v1/reports/') && fr.url().includes('/html'));
+    if (!f) { console.log(`[${reportName}] no iframe`); continue; }
+    const u = new URL(f.url());
+    console.log(`
+=== ${reportName} ===
+${u.pathname}
+settings: ${u.searchParams.get('settings')}`);
+    for (const ids of [[81], [84], [67], [28]]) {
+      const st = JSON.parse(u.searchParams.get('settings'));
+      st.timePeriodStart = '2026-06-01'; st.timePeriodEndExclusive = '2026-10-08'; st.staffIds = ids;
+      u.searchParams.set('settings', JSON.stringify(st));
+      const p2 = await context.newPage();
+      await p2.goto(u.toString(), { waitUntil: 'domcontentloaded' });
+      await p2.waitForTimeout(3000);
+      const text = await p2.evaluate(() => document.body?.innerText || '');
+      await p2.close();
+      out(`${reportName.replace(/\W+/g, '_')}_${ids[0]}.txt`, text);
+      console.log(`--- staffIds ${JSON.stringify(ids)} ---
+${text.slice(0, 1500)}`);
+    }
+  }
+
   await browser.close();
 })().catch(e => { console.error('FAILED:', e); process.exit(1); });
