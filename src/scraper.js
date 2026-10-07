@@ -737,32 +737,31 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
  * All Selected Staff\t370\t35\t9.46\t77\t20.81\t80\t21.62\t80\t21.62\t58\t4\t6.90\t10\t17.24\t10\t17.24\t10\t17.24
  *   cols[1]=370 (existing total), cols[8]=80 (existing ret180), cols[10]=58 (new total), cols[17]=10 (new ret180)
  */
-// After generating the single-month retention report (to capture iframe URL+settings),
-// open a second page with explicit start/end dates for a 60-day rolling window.
-// Anchor: today for current month, last day of month for completed months.
+// After generating the retention report (to capture iframe URL+settings), open a
+// second page with explicit start/end dates for the rolling window (see fetchRetention).
 async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null) {
   const frame = page.frames().find(
     f => f.url().includes('/api/v1/reports/') && f.url().includes('/html')
   );
-  if (!frame) { console.warn('  [Retention 60d] iframe not found'); return null; }
+  if (!frame) { console.warn('  [Retention window] iframe not found'); return null; }
 
   let settings;
   try {
     const urlObj = new URL(frame.url());
     settings = JSON.parse(urlObj.searchParams.get('settings') || '{}');
   } catch(e) {
-    console.warn('  [Retention 60d] could not parse settings:', e.message);
+    console.warn('  [Retention window] could not parse settings:', e.message);
     return null;
   }
 
   settings.timePeriodStart         = startStr;
   settings.timePeriodEndExclusive  = endExclusiveStr;
-  applyLocationIds(settings, locationIds, 'Retention 60d');
+  applyLocationIds(settings, locationIds, 'Retention window');
   applyStaffIds(settings, staffIds);
 
   const urlObj2 = new URL(frame.url());
   urlObj2.searchParams.set('settings', JSON.stringify(settings));
-  console.log(`  [Retention 60d] ${startStr} → ${endExclusiveStr}`);
+  console.log(`  [Retention window] ${startStr} → ${endExclusiveStr}`);
 
   const p = await page.context().newPage();
   try {
@@ -773,6 +772,10 @@ async function fetchRetentionWindow(page, startStr, endExclusiveStr, locationIds
     await p.close();
   }
 }
+
+const RETENTION_WINDOW_DAYS = 60;
+// Stamped on cached months so a window change re-fetches just retention, not every metric.
+const RETENTION_METHOD = `rolling${RETENTION_WINDOW_DAYS}`;
 
 async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0, location = null, locationIds = null, staffIds = null) {
   console.log(`\n  [Retention] ${monthOption}${location ? ` [${location}]` : ''}`);
@@ -793,19 +796,21 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
   await settle(page, 7000);
   await snap(page, `${snapPrefix}_ret_generated`);
 
-  // Window: quarter-start → first of month after target period.
-  //   monthsAgo=0 (June):  Apr 1 → Jul 1
-  //   monthsAgo=1 (May):   Apr 1 → Jun 1
-  //   monthsAgo=2 (April): Apr 1 → May 1
+  // Window: rolling RETENTION_WINDOW_DAYS ending on the month's last day (through
+  // today for the current month). Each month is its own discrete figure — the
+  // quarterly manager view averages the months, it never spans the quarter in one
+  // report. (2026-06-28 → 2026-10-07 this was quarter-start → month-end, which made
+  // "monthly" bars cumulative within each quarter; Morgan restored rolling 60 days.)
+  //   on Oct 7 (end exclusive): Oct = Aug 9 → Oct 8   Sep = Aug 2 → Oct 1   Aug = Jul 3 → Sep 1
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
   const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const targetDate        = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
-  const quarterStartMonth = Math.floor(targetDate.getMonth() / 3) * 3;
-  const startDate         = new Date(targetDate.getFullYear(), quarterStartMonth, 1);
-  const endDate           = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1);
+  const endDate = monthsAgo === 0
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+    : new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 1);
+  const startDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate() - RETENTION_WINDOW_DAYS);
 
   const windowText = await fetchRetentionWindow(page, fmt(startDate), fmt(endDate), locationIds, staffIds).catch(e => {
-    console.warn('  [Retention 60d] error, falling back to single month:', e.message);
+    console.warn('  [Retention window] error, falling back to the generated report:', e.message);
     return null;
   });
   if (!windowText && (locationIds || staffIds)) return null; // Generate frame is all-locations/staff, see fetchSales
@@ -986,7 +991,17 @@ async function scrapeAccount(browser, account, cache) {
     console.log(`\n── Period: ${p.label} (picker: "${p.pickerLabel}")${location ? ` [${location}]` : ''} ──`);
 
     // A month cached before 'pps' existed lacks productPerSale — refetch it once.
-    if (!p.isCurrent && bizCache.periods[key] && (!metrics.includes('pps') || 'productPerSale' in bizCache.periods[key])) {
+    const cached = bizCache.periods[key];
+    if (!p.isCurrent && cached && cached.retentionMethod !== RETENTION_METHOD
+        && (!metrics.includes('pps') || 'productPerSale' in cached)) {
+      console.log(`  Cached ${key} has ${cached.retentionMethod || 'quarter-start'} retention — re-fetching retention only`);
+      const r = await withRetry(() => fetchRetention(page, base, p.pickerLabel, prefix, p.monthsAgo, location, locationIds, staffIds), 'Ret');
+      if (r) {
+        Object.assign(cached, { retention: r.combined, existingRetPct: r.existingPct, newRetPct: r.newPct, retentionMethod: RETENTION_METHOD });
+      }
+    }
+    if (!p.isCurrent && cached && cached.retentionMethod === RETENTION_METHOD
+        && (!metrics.includes('pps') || 'productPerSale' in cached)) {
       console.log(`  Using cached data for ${key}`);
       results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: false, ...bizCache.periods[key] });
       continue;
@@ -1024,7 +1039,7 @@ async function scrapeAccount(browser, account, cache) {
 
     console.log(`  → sales=$${sales?.toLocaleString()} proj=$${projectedSales?.toLocaleString()} util=${utilization}% avail=${availableHours}h ret=${retention}% product/sale=$${productPerSale}`);
 
-    const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct };
+    const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct, retentionMethod: RETENTION_METHOD };
     if (metrics.includes('pps')) Object.assign(periodData, { productPerSale, productSalesCount });
     // Only cache a completed month once every metric actually came back —
     // otherwise a transient failure (e.g. a stuck overlay blocking a click)
