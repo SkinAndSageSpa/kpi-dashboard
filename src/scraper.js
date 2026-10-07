@@ -1244,6 +1244,7 @@ async function main() {
         { data: withSupply(missing('skinsage_lmt',  'Massage Therapists'), 'lmt'), supply: true },
       ],
       note: 'Each column counts only that role’s providers, at both locations · Quarterly goals: last quarter, then each month this quarter · headline = quarter to date',
+      bonusPerGoal: 125, // one bonus per column (Esti team, LMT team): up to $500/quarter each
     },
     {
       out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),

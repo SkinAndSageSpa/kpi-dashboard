@@ -705,9 +705,8 @@ const TEAM_STYLES = `
 .team-note {
   margin-top: 4px;
 }
+.team-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .bonus {
-  max-width: 640px;
-  margin: 0 auto 14px;
   background: var(--surface);
   border-radius: var(--r);
   box-shadow: 0 1px 8px rgba(60,30,24,.07), 0 0 0 1px var(--border);
@@ -1004,17 +1003,19 @@ function managerPanel({ data, supply = false }, view, goalColors = false) {
     </div>`;
 }
 
-// Studio manager's monthly bonus (WAXON): perGoal $ for each goal met this month
-// vs last month. "Projected" = this month to date against last month's final
-// figure, using exactly the values the cards show. Goal rules (Morgan, 2026-10-07):
+// Manager bonus: perGoal $ for each goal met vs the prior period, using exactly the
+// values the cards show (viewSeries head vs prior).
+//   WAXON (monthly):      one studio-manager banner, this month to date vs last month
+//   Skin & Sage (quarterly): one banner per column (Esti team, LMT team), up to $500
+//                         per quarter each, this quarter to date vs last quarter
+// Goal rules (Morgan, 2026-10-07):
 //   retention      — increase over prior month          (cur >  prior)
 //   product/sale   — increase over prior month          (cur >  prior)
 //   supply cost %  — reduction from prior month         (cur <  prior)
 //   bookable hours — maintain or increase               (cur >= prior)
 // A goal with a missing figure (e.g. this month's supply cost not in the sheet
 // yet) is "pending" — neither counted nor treated as missed.
-function bonusBanner(periods, perGoal) {
-  const cur = periods[0] || {}, prior = periods[1] || {};
+function bonusBanner(cur, prior, perGoal, { title, basis }) {
   const pct0 = v => Math.round(v) + '%';
   const goals = [
     { name: 'Client retention',    k: 'retention',      fmt: pct0 },
@@ -1035,13 +1036,13 @@ function bonusBanner(periods, perGoal) {
   return `
 <div class="bonus">
   <div class="bonus-top">
-    <span class="bonus-label">Projected ${monthAbbrev(cur.label || '')} manager bonus</span>
+    <span class="bonus-label">${title}</span>
     <span class="bonus-amount">$${earned}<small>of $${max}</small></span>
   </div>
   <div class="bonus-goals">
     ${goals.map(g => `<div class="goal ${g.status}"><b>${g.name}</b>${label[g.status]} · ${g.detail}</div>`).join('\n    ')}
   </div>
-  <div class="bonus-note">$${perGoal} per goal · month to date vs last month · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · $${pending} pending data` : ''}</div>
+  <div class="bonus-note">$${perGoal} per goal · ${basis} · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · $${pending} pending data` : ''}</div>
 </div>`;
 }
 
@@ -1049,7 +1050,16 @@ function bonusBanner(periods, perGoal) {
 // (that needs a GitHub token) and no cross-business data.
 //   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
 function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null }) {
-  const rendered = panels.map(pnl => managerPanel(pnl, view, !!bonusPerGoal)).join('\n');
+  const rendered = panels.map(pnl => {
+    let banner = '';
+    if (bonusPerGoal && pnl.data && !pnl.data.error && pnl.data.periods?.length) {
+      const { head, prior } = viewSeries(pnl.data.periods, view);
+      banner = view === 'quarterly'
+        ? bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${head.label} ${pnl.data.label} bonus`, basis: 'quarter to date vs last quarter' })
+        : bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${monthAbbrev(head.label || '')} manager bonus`, basis: 'month to date vs last month' });
+    }
+    return `<div class="team-col">${banner}${managerPanel(pnl, view, !!bonusPerGoal)}</div>`;
+  }).join('\n');
   const period = view === 'quarterly' ? 'quarter' : 'month';
 
   return `<!DOCTYPE html>
@@ -1071,8 +1081,6 @@ ${TEAM_STYLES}
   <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
 </header>
 
-${bonusPerGoal && panels[0]?.data?.periods?.length ? bonusBanner(panels[0].data.periods, bonusPerGoal) : ''}
-
 <div class="team-grid${columns === 1 ? ' single' : ''}" style="--cols:${columns}">
 ${rendered}
 </div>
@@ -1080,7 +1088,7 @@ ${rendered}
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
   Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; ${bonusPerGoal
-    ? 'Colors = bonus goal vs last month: green met · red not met · grey pending (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)'
+    ? `Colors = bonus goal vs last ${period}: green met · red not met · grey pending (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
     : `Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)`}
 </footer>
 
