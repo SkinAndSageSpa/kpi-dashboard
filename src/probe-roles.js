@@ -1,11 +1,10 @@
 /**
- * probe-roles.js — READ-ONLY. Looks for a dynamic way to tell Estheticians from
- * Massage Therapists in Mangomint:
- *   1. Every JSON API response the app loads on Settings → Staff and a staff profile
- *      (staff records may carry a job title / service ids)
- *   2. The staff profile page text + its tabs (Details / Services)
- *   3. The list of available reports (a services-by-staff report would also work)
- * Writes everything to $PROBE_DIR.
+ * probe-roles.js — READ-ONLY. For every staff id in the BI Appointments report,
+ * fetch the services Mangomint has enabled for them and show how a
+ * services-based Esti/LMT rule would classify them.
+ *   GET /api/v1/company-settings/services            → catalog (names, categories)
+ *   GET /api/v1/company-settings/staff/<id>/services → enabled services for one staff
+ * Also checks whether archived staff are reachable by that same endpoint.
  */
 
 const { chromium } = require('playwright');
@@ -43,66 +42,79 @@ async function settle(page, extra = 3000) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
 
-  // Capture JSON API responses
-  let n = 0;
-  const index = [];
-  page.on('response', async res => {
-    const ct = res.headers()['content-type'] || '';
-    if (!ct.includes('json')) return;
-    try {
-      const body = await res.text();
-      const file = `api_${String(++n).padStart(3, '0')}.json`;
-      out(file, `${res.request().method()} ${res.url()}\n\n${body}`);
-      index.push({ file, url: res.url(), bytes: body.length });
-    } catch {}
+  // Capture the app's own headers for a services request so we can replay them.
+  let replayHeaders = null;
+  page.on('request', req => {
+    if (!replayHeaders && /\/api\/v1\/company-settings\/staff\/\d+\/services/.test(req.url())) {
+      replayHeaders = req.headers();
+    }
   });
 
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await settle(page, 5000);
   if (page.url().includes('login')) throw new Error('cookies expired');
-  console.log('Logged in:', page.url());
-
-  // Reports list
-  await page.goto(`${BASE}/reports`, { waitUntil: 'domcontentloaded' });
-  await settle(page, 4000);
-  out('reports.txt', await page.evaluate(() => document.body?.innerText || ''));
-  console.log('\n=== Reports page ===\n' + (await page.evaluate(() => document.body?.innerText || '')).slice(0, 3000));
-
-  // Settings → Staff, then a staff profile
-  const mark = index.length;
   await page.goto(`${BASE}/settings/staff`, { waitUntil: 'domcontentloaded' });
   await settle(page, 5000);
-  await page.getByText('Pamella Kropp', { exact: true }).first().click().catch(e => console.log('click staff:', e.message));
-  await settle(page, 4000);
-  out('profile.txt', `${page.url()}\n\n${await page.evaluate(() => document.body?.innerText || '')}`);
-  await page.screenshot({ path: path.join(OUT, 'profile.png'), fullPage: true });
-  console.log('\n=== Profile ===\n' + page.url() + '\n' + (await page.evaluate(() => document.body?.innerText || '')).slice(0, 2500));
+  await page.getByText('Pamella Kropp', { exact: true }).first().click();
+  await settle(page, 2000);
+  await page.getByText('Services', { exact: true }).first().click();
+  await settle(page, 3000);
+  const hdr = Object.fromEntries(Object.entries(replayHeaders || {}).filter(([k]) => !/^(cookie|content-length|host)$/i.test(k)));
+  console.log('Replay headers:', Object.keys(hdr).join(', '));
 
-  // Services tab on the profile, if any
-  for (const tab of ['Services', 'Service']) {
-    const t = page.getByText(tab, { exact: true }).first();
-    if (await t.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await t.click();
-      await settle(page, 3000);
-      out('profile_services.txt', `${page.url()}\n\n${await page.evaluate(() => document.body?.innerText || '')}`);
-      await page.screenshot({ path: path.join(OUT, 'profile_services.png'), fullPage: true });
-      console.log('\n=== Profile services tab ===\n' + (await page.evaluate(() => document.body?.innerText || '')).slice(0, 2500));
-      break;
-    }
+  // In-page fetch (same origin, app cookies) with the app's headers.
+  const getJson = url => page.evaluate(async ({ url, hdr }) => {
+    const r = await fetch(url, { headers: hdr, credentials: 'include' });
+    return { status: r.status, body: r.ok ? await r.json() : (await r.text()).slice(0, 200) };
+  }, { url, hdr });
+
+  const cat = await getJson('/api/v1/company-settings/services');
+  if (cat.status !== 200) throw new Error(`catalog HTTP ${cat.status}: ${cat.body}`);
+  const services   = cat.body.servicesById;
+  const categories = Object.fromEntries(cat.body.serviceCategories.map(c => [c.id, c.name]));
+
+  // All staff ids the reports know about (active + archived), from a util report's settings.
+  await page.goto(`${BASE}/reports`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 3000);
+  await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
+  await settle(page, 3000);
+  const trigger = page.locator('[class*="staffSelectorTriggerBtn"]').first();
+  await trigger.click(); await page.waitForTimeout(800);
+  await page.getByText('Select all', { exact: true }).last().click(); await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
+  await page.getByText('Generate', { exact: true }).first().click();
+  await settle(page, 7000);
+  const frame = page.frames().find(f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html'));
+  const staffIds = JSON.parse(new URL(frame.url()).searchParams.get('settings')).staffIds;
+  console.log(`\n${staffIds.length} staff ids in report settings`);
+
+  const rows = [];
+  for (const id of staffIds) {
+    const r = await getJson(`/api/v1/company-settings/staff/${id}/services`);
+    if (r.status !== 200) { rows.push({ id, status: r.status }); continue; }
+    const enabled = Object.keys(r.body.services || {}).map(sid => services[sid]).filter(Boolean);
+    const sig = enabled.filter(s => /signature facial/i.test(s.name));
+    const massageCat = enabled.filter(s => categories[s.serviceCategoryId] === 'Massage & Body Treatments');
+    const massageNamed = enabled.filter(s => /massage/i.test(s.name));
+    rows.push({
+      id, status: 200, enabledCount: enabled.length,
+      signatureFacial: sig.map(s => s.name),
+      massageCategory: massageCat.map(s => s.name),
+      massageNamed: massageNamed.map(s => s.name),
+    });
   }
+  out('roles.json', rows);
 
-  out('api_index.json', index);
-  console.log('\n=== JSON responses since Settings → Staff ===');
-  for (const r of index.slice(mark)) console.log(`${r.file}  ${r.bytes}B  ${r.url}`);
-
-  // Grep captured bodies for role-ish fields
-  console.log('\n=== Role-ish keys in captured JSON ===');
-  const keys = /"(jobTitle|title|position|role|roleName|staffType|serviceIds|serviceCategoryIds|categoryName|serviceCategory)"/g;
-  for (const r of index) {
-    const body = fs.readFileSync(path.join(OUT, r.file), 'utf8');
-    const hits = [...new Set((body.match(keys) || []))];
-    if (hits.length) console.log(`${r.file} ${r.url.slice(0, 120)} → ${hits.join(', ')}`);
+  // Names: from the util report rows, one staffId at a time is slow — use the
+  // probe-staff mapping file instead if present; else print ids only.
+  console.log('\nid | enabled | signatureFacial | massage-category services');
+  for (const r of rows) {
+    if (r.status !== 200) { console.log(`${r.id} | HTTP ${r.status}`); continue; }
+    if (!r.enabledCount) continue;
+    console.log(`${r.id} | ${r.enabledCount} | ${r.signatureFacial.length ? 'YES ' + JSON.stringify(r.signatureFacial) : '-'} | ${JSON.stringify(r.massageCategory)}`);
   }
+  const counts = rows.reduce((m, r) => (m[r.status === 200 ? (r.enabledCount ? 'withServices' : 'noServices') : `http${r.status}`] = (m[r.status === 200 ? (r.enabledCount ? 'withServices' : 'noServices') : `http${r.status}`] || 0) + 1, m), {});
+  console.log('\nSummary:', JSON.stringify(counts));
 
   await browser.close();
 })().catch(e => { console.error('FAILED:', e); process.exit(1); });
