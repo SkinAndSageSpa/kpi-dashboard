@@ -924,7 +924,22 @@ function viewSeries(periods, view) {
 const dollars2 = v => '$' + v.toFixed(2);
 const CHART_SLOTS = 4; // max bars on either view (4 months, or last quarter + 3 months)
 
-function managerPanel({ data, supply = false }, view) {
+// Bonus goal rules (WAXON studio manager, Morgan 2026-10-07): met = cur vs prior.
+// Used by the bonus banner and, on pages with a bonus, by the card colors too, so a
+// card is green exactly when its bonus goal is met.
+const GOAL_RULES = {
+  retention:      (c, p) => c >  p,  // increase over prior month
+  productPerSale: (c, p) => c >  p,  // increase over prior month
+  supplyPct:      (c, p) => c <  p,  // reduction from prior month
+  availableHours: (c, p) => c >= p,  // maintain or increase
+};
+const known = v => v !== null && v !== undefined;
+function goalHealth(k, cur, prior) {
+  if (!known(cur) || !known(prior)) return 'neutral';
+  return GOAL_RULES[k](cur, prior) ? 'green' : 'red';
+}
+
+function managerPanel({ data, supply = false }, view, goalColors = false) {
   if (!data || data.error) {
     return `
       <div class="biz-panel error-panel">
@@ -936,14 +951,16 @@ function managerPanel({ data, supply = false }, view) {
   const labels = series.map(p => p?.label);
   const val = k => series.map(p => p?.[k] ?? null);
 
-  const rh = trendHealthPp(head.retention ?? null, prior.retention ?? null);
+  const rh = goalColors ? goalHealth('retention', head.retention, prior.retention)
+    : trendHealthPp(head.retention ?? null, prior.retention ?? null);
   const retCard = kpiCard({
     label: 'Client Retention', health: rh, tag,
     currentDisplay: head.retention === null || head.retention === undefined ? '—' : Math.round(head.retention) + '%',
     chart: retentionChart(series, rh, CHART_SLOTS),
   });
 
-  const ph = trendHealthSales(head.productPerSale ?? null, prior.productPerSale ?? null);
+  const ph = goalColors ? goalHealth('productPerSale', head.productPerSale, prior.productPerSale)
+    : trendHealthSales(head.productPerSale ?? null, prior.productPerSale ?? null);
   const ppsCard = kpiCard({
     label: 'Product Sales / Service', health: ph, tag,
     currentDisplay: head.productPerSale === null || head.productPerSale === undefined ? '—' : dollars2(head.productPerSale),
@@ -951,14 +968,16 @@ function managerPanel({ data, supply = false }, view) {
   });
 
   // Lower supply cost is better: green when it drops by more than 1pp.
-  const sh = trendHealthPp(prior.supplyPct ?? null, head.supplyPct ?? null, 1);
+  const sh = goalColors ? goalHealth('supplyPct', head.supplyPct, prior.supplyPct)
+    : trendHealthPp(prior.supplyPct ?? null, head.supplyPct ?? null, 1);
   const supplyCard = supply ? kpiCard({
     label: 'Supply Costs (% of sales)', health: sh, tag,
     currentDisplay: head.supplyPct === null || head.supplyPct === undefined ? '—' : head.supplyPct.toFixed(1) + '%',
-    chart: bigChart(val('supplyPct'), labels, sh, v => Math.round(v) + '%', null, CHART_SLOTS),
+    chart: bigChart(val('supplyPct'), labels, sh, v => (Number.isInteger(v) ? v : v.toFixed(1)) + '%', null, CHART_SLOTS),
   }) : '';
 
-  const hh = trendHealthSales(head.availableHours ?? null, prior.availableHours ?? null);
+  const hh = goalColors ? goalHealth('availableHours', head.availableHours, prior.availableHours)
+    : trendHealthSales(head.availableHours ?? null, prior.availableHours ?? null);
   const hoursCard = kpiCard({
     label: 'Bookable Hours', health: hh, tag,
     currentDisplay: head.availableHours === null || head.availableHours === undefined ? '—' : Math.round(head.availableHours).toLocaleString('en-US') + 'h',
@@ -998,15 +1017,15 @@ function bonusBanner(periods, perGoal) {
   const cur = periods[0] || {}, prior = periods[1] || {};
   const pct0 = v => Math.round(v) + '%';
   const goals = [
-    { name: 'Client retention',    k: 'retention',      test: (c, p) => c > p,  fmt: pct0,      verb: 'increase' },
-    { name: 'Product / service',   k: 'productPerSale', test: (c, p) => c > p,  fmt: dollars2,  verb: 'increase' },
-    { name: 'Supply costs',        k: 'supplyPct',      test: (c, p) => c < p,  fmt: v => v.toFixed(1) + '%', verb: 'reduction' },
-    { name: 'Bookable hours',      k: 'availableHours', test: (c, p) => c >= p, fmt: v => Math.round(v).toLocaleString('en-US') + 'h', verb: 'maintain' },
+    { name: 'Client retention',    k: 'retention',      fmt: pct0 },
+    { name: 'Product / service',   k: 'productPerSale', fmt: dollars2 },
+    { name: 'Supply costs',        k: 'supplyPct',      fmt: v => v.toFixed(1) + '%' },
+    { name: 'Bookable hours',      k: 'availableHours', fmt: v => Math.round(v).toLocaleString('en-US') + 'h' },
   ].map(g => {
     const c = cur[g.k], p = prior[g.k];
-    const known = c !== null && c !== undefined && p !== null && p !== undefined;
-    const status = !known ? 'pending' : g.test(c, p) ? 'met' : 'missed';
-    const detail = known ? `${g.fmt(c)} vs ${g.fmt(p)}` : (c === null || c === undefined ? 'awaiting this month' : 'no prior month');
+    const health = goalHealth(g.k, c, p);
+    const status = health === 'neutral' ? 'pending' : health === 'green' ? 'met' : 'missed';
+    const detail = status !== 'pending' ? `${g.fmt(c)} vs ${g.fmt(p)}` : (!known(c) ? 'awaiting this month' : 'no prior month');
     return { ...g, status, detail };
   });
   const earned  = goals.filter(g => g.status === 'met').length * perGoal;
@@ -1030,7 +1049,7 @@ function bonusBanner(periods, perGoal) {
 // (that needs a GitHub token) and no cross-business data.
 //   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
 function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null }) {
-  const rendered = panels.map(pnl => managerPanel(pnl, view)).join('\n');
+  const rendered = panels.map(pnl => managerPanel(pnl, view, !!bonusPerGoal)).join('\n');
   const period = view === 'quarterly' ? 'quarter' : 'month';
 
   return `<!DOCTYPE html>
@@ -1060,7 +1079,9 @@ ${rendered}
 
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
-  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)
+  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; ${bonusPerGoal
+    ? 'Colors = bonus goal vs last month: green met · red not met · grey pending (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)'
+    : `Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)`}
 </footer>
 
 </body>
