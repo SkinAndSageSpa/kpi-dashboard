@@ -1132,6 +1132,7 @@ async function main() {
     for (const account of ACCOUNTS) {
       try {
         businessData.push(await scrapeAccount(browser, account, cache));
+        saveCache(cache); // checkpoint — a run killed by the job timeout keeps what it fetched
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
@@ -1142,6 +1143,7 @@ async function main() {
     for (const account of LOCATION_ACCOUNTS) {
       try {
         locationData.push(await scrapeAccount(browser, account, cache));
+        saveCache(cache);
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: account.label, error: err.message });
@@ -1173,6 +1175,7 @@ async function main() {
         }
         groupData.push(await scrapeAccount(browser, account, cache));
         cache.businesses[account.locationKey].staffSig = sig;
+        saveCache(cache);
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: `Skin & Sage ${account.label}`, error: err.message });
