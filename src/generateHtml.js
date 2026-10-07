@@ -856,7 +856,8 @@ const TEAM_ERROR_TEXT = 'Numbers unavailable right now — check back after the 
 // this quarter; headline = quarter to date. Quarter figures:
 //   retention      → average of the quarter's discrete monthly figures (each month
 //                    is its own rolling 60-day report — never one report over the quarter)
-//   product/sale   → weighted by # sales
+//   product/sale   → average of the months' report values ("Selected Staff Total"
+//                    row, taken as-is — never recomputed from # sales)
 //   bookable hours → monthly average
 //   supply cost %  → average of the months in the sheet
 
@@ -870,13 +871,11 @@ const mean = xs => { const v = xs.filter(x => x !== null && x !== undefined); re
 
 // Aggregate a set of months (newest first) into one quarter-level point.
 function quarterPoint(months, label) {
-  const withPps = months.filter(m => m.productPerSale !== null && m.productPerSale !== undefined && m.productSalesCount);
-  const ppsN    = withPps.reduce((a, m) => a + m.productSalesCount, 0);
   return {
     label,
     retention:      mean(months.map(m => m.retention)),
     newRetPct:      mean(months.map(m => m.newRetPct)),
-    productPerSale: ppsN ? withPps.reduce((a, m) => a + m.productPerSale * m.productSalesCount, 0) / ppsN : mean(months.map(m => m.productPerSale)),
+    productPerSale: mean(months.map(m => m.productPerSale)),
     availableHours: mean(months.map(m => m.availableHours)),
     supplyPct:      mean(months.map(m => m.supplyPct)),
   };
@@ -998,7 +997,7 @@ ${rendered}
 
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
-  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = avg product $ per sale &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)
+  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)
 </footer>
 
 </body>

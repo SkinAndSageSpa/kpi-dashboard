@@ -848,7 +848,7 @@ async function fetchRetention(page, base, monthOption, snapPrefix, monthsAgo = 0
  *   Selected Staff Total | # Sales | Avg Product Total Per Sale | Avg Service Total Per Sale | Avg # of Products Per Sale
  * Same harvest-then-rewrite flow as the other reports: Generate once (all staff,
  * incl. archived), then reload with explicit dates/locations/staff. Also returns
- * # Sales so quarter figures can be weighted correctly.
+ * # Sales (kept for auditing only — the dashboard shows the report value as-is).
  */
 async function fetchProductPerSale(page, base, monthsAgo, isCurrent, locationIds = null, staffIds = null) {
   console.log(`\n  [Product/sale] ${monthLabel(monthsAgo)}`);
