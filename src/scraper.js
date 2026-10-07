@@ -38,7 +38,7 @@ const { chromium } = require('playwright');
 const fs   = require('fs');
 const path = require('path');
 const { generateHtml, generateTeamHtml } = require('./generateHtml');
-const { SKINSAGE_STAFF, staffIdsFor } = require('./staffGroups');
+const { resolveRoles } = require('./staffRoles');
 
 const CACHE_FILE    = process.env.CACHE_FILE || path.join(__dirname, '..', 'data-cache.json');
 const CACHE_VERSION = 7; // bump when cached period schema changes, or when a scrape-logic
@@ -53,9 +53,11 @@ const CACHE_VERSION = 7; // bump when cached period schema changes, or when a sc
 function loadCache() {
   try {
     const c = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    if (c.version !== CACHE_VERSION) return { version: CACHE_VERSION, businesses: {} };
+    // Staff roles (see staffRoles.js) aren't KPI numbers — keep them across version bumps.
+    if (c.version !== CACHE_VERSION) return { version: CACHE_VERSION, businesses: {}, staffRoles: c.staffRoles || {} };
+    c.staffRoles = c.staffRoles || {};
     return c;
-  } catch { return { version: CACHE_VERSION, businesses: {} }; }
+  } catch { return { version: CACHE_VERSION, businesses: {}, staffRoles: {} }; }
 }
 
 function saveCache(cache) {
@@ -118,14 +120,15 @@ const LOCATION_ACCOUNTS = [
 ];
 
 // Per-role scrapes for the Skin & Sage employee page: same flow again, but each
-// report's settings.staffIds is overridden to just that role's providers (see
-// staffGroups.js). All three reports honor a narrowed staffIds — confirmed by
+// report's settings.staffIds is overridden to just that role's providers. The ids
+// are filled in each run by prepareStaffGroups() (see staffRoles.js), so new hires
+// and departures need no code change. All three reports honor a narrowed staffIds — confirmed by
 // probe 2026-10-06: the two halves of the staff list summed back to the full
 // utilization hours exactly, and to within ~0.3% (sales) / ~1% (retention clients)
 // since a sale or client shared by two providers counts for each of them.
 const STAFF_GROUP_ACCOUNTS = [
-  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, staffIds: staffIdsFor('esti') },
-  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, staffIds: staffIdsFor('lmt') },
+  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, role: 'esti', staffIds: null },
+  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, role: 'lmt',  staffIds: null },
 ];
 
 // Narrow a harvested (all-locations) report settings object to one location.
@@ -850,6 +853,15 @@ async function openAccount(browser, account) {
   await context.addCookies(parseCookies(raw));
 
   const page = await context.newPage();
+  // Remember the headers Mangomint's own app sends on its /api/v1 calls (auth
+  // token, app version) so staffRoles.js can call the same JSON endpoints.
+  const apiHeaders = {};
+  page.on('request', req => {
+    if (Object.keys(apiHeaders).length || !req.url().includes('app.mangomint.com/api/v1/')) return;
+    for (const [k, v] of Object.entries(req.headers())) {
+      if (!/^(cookie|content-length|content-type|host)$/i.test(k)) apiHeaders[k] = v;
+    }
+  });
   // Default Playwright actionability timeout is 30s per click attempt (x2 retries
   // x3 report types x4 periods = up to 12 minutes wasted on one account if every
   // click hits a blocking element). 12s is generous next to real click latency
@@ -863,7 +875,7 @@ async function openAccount(browser, account) {
     throw new Error(`${account.cookieEnv} expired — refresh the GitHub secret`);
   }
   console.log(`Logged in: ${page.url()}`);
-  return { context, page, base };
+  return { context, page, base, apiHeaders };
 }
 
 async function scrapeAccount(browser, account, cache) {
@@ -936,40 +948,66 @@ async function scrapeAccount(browser, account, cache) {
   return { key: cacheKey, label: account.label, periods: results };
 }
 
-// ── Staff classification check ──────────────────────────────────────────────
-// Anyone with booked hours on the dashboard's window who isn't in staffGroups.js
-// silently falls out of both Esti and LMT columns. List them so the owner
-// dashboard can flag it (a new hire is the usual cause).
+// ── Staff role groups ─────────────────────────────────────────────────────────
+// Works out which Mangomint staff ids are Estis vs LMTs for this run (staffRoles.js),
+// and lists anyone with booked hours who lands in neither column so the owner
+// dashboard can show it.
 
-async function findUnclassifiedStaff(browser, account, knownNames) {
-  const { context, page, base } = await openAccount(browser, account);
+// Generate a report with all staff selected; return its iframe URL.
+async function generateReportUrl(page, base, reportName, urlFragment, allStaff) {
+  await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
+  await settle(page, 3000);
+  await dismissOverlays(page);
+  await page.getByText(reportName, { exact: true }).first().click();
+  await settle(page, 3000);
+  if (allStaff) await selectAllStaff(page, null);
+  await dismissOverlays(page);
+  await page.getByText('Generate', { exact: true }).first().click();
+  await settle(page, 7000);
+  const frame = page.frames().find(f => f.url().includes(urlFragment) && f.url().includes('/html'));
+  if (!frame) throw new Error(`${reportName}: iframe not found`);
+  return frame.url();
+}
+
+async function prepareStaffGroups(browser, account, cache) {
+  const { context, page, base, apiHeaders } = await openAccount(browser, account);
   try {
-    await page.goto(`${base}/reports`, { waitUntil: 'domcontentloaded' });
-    await settle(page, 3000);
-    await dismissOverlays(page);
-    await page.getByText('Business Intelligence: Appointments', { exact: true }).first().click();
-    await settle(page, 3000);
-    await selectAllStaff(page, null);
-    await dismissOverlays(page);
-    await page.getByText('Generate', { exact: true }).first().click();
-    await settle(page, 7000);
+    const utilUrl  = await generateReportUrl(page, base, 'Business Intelligence: Appointments', '/reports/business-intelligence/appointments', true);
+    const salesUrl = await generateReportUrl(page, base, 'Service & Product Sales By Staff', '/api/v1/reports/sales-by-staff', true);
+    const allStaffIds = JSON.parse(new URL(utilUrl).searchParams.get('settings') || '{}').staffIds || [];
+    if (!allStaffIds.length) throw new Error('no staff ids in report settings');
 
-    const frame = page.frames().find(
-      f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
-    );
-    if (!frame) throw new Error('util iframe not found');
-    const url = new URL(frame.url());
-    const settings = JSON.parse(url.searchParams.get('settings') || '{}');
-    settings.timePeriodStart        = completedMonthWindow(account.monthsBack - 1).start;
-    settings.timePeriodEndExclusive = currentMonthWindows().mtdEnd;
-    url.searchParams.set('settings', JSON.stringify(settings));
+    // Performed-services lookback for archived staff: comfortably wider than the dashboard.
+    const lookbackStart = completedMonthWindow(6).start;
+    const windowEnd     = currentMonthWindows().mtdEnd;
+    await resolveRoles({
+      page, apiHeaders, salesByStaffUrl: salesUrl, allStaffIds, store: cache.staffRoles,
+      windowStart: lookbackStart, windowEndExclusive: windowEnd,
+    });
 
-    const p = await context.newPage();
-    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
-    await p.waitForTimeout(3000);
-    const rows = parseStaffAvailBooked(await p.evaluate(() => document.body?.innerText || '')) || [];
-    console.log(`  [Staff check] ${settings.timePeriodStart}..${settings.timePeriodEndExclusive}: ${rows.length} staff rows`);
-    return rows.filter(r => r.booked >= 1 && !knownNames.has(r.name)).map(r => r.name);
+    const idsFor = role => allStaffIds.filter(id => cache.staffRoles[id]?.role === role);
+    const esti = idsFor('esti');
+    const lmt  = idsFor('lmt');
+    console.log(`  [Roles] esti=${JSON.stringify(esti)} lmt=${JSON.stringify(lmt)}`);
+
+    // Anyone else who actually booked hours in the dashboard window is in neither column.
+    const others = allStaffIds.filter(id => !esti.includes(id) && !lmt.includes(id));
+    let notCounted = [];
+    if (others.length) {
+      const u = new URL(utilUrl);
+      const settings = JSON.parse(u.searchParams.get('settings') || '{}');
+      settings.timePeriodStart        = completedMonthWindow(account.monthsBack - 1).start;
+      settings.timePeriodEndExclusive = windowEnd;
+      settings.staffIds               = others;
+      u.searchParams.set('settings', JSON.stringify(settings));
+      const p = await context.newPage();
+      await p.goto(u.toString(), { waitUntil: 'domcontentloaded' });
+      await p.waitForTimeout(3000);
+      const rows = parseStaffAvailBooked(await p.evaluate(() => document.body?.innerText || '')) || [];
+      await p.close();
+      notCounted = rows.filter(r => r.booked >= 1).map(r => r.name);
+    }
+    return { esti, lmt, notCounted };
   } finally {
     await context.close();
   }
@@ -991,7 +1029,7 @@ async function main() {
   const locationData  = [];
   const groupData     = [];
   const errors = [];
-  let unclassified = [];
+  let notCounted = [];
 
   const nullPeriods = (monthsBack = 3) => Array.from({ length: monthsBack }, (_, monthsAgo) => ({
     label: monthLabel(monthsAgo), monthsAgo, isCurrent: monthsAgo === 0,
@@ -1019,9 +1057,30 @@ async function main() {
       }
     }
 
+    let groups = null;
+    try {
+      groups = await prepareStaffGroups(browser, ACCOUNTS.find(a => a.key === 'skinsage'), cache);
+      notCounted = groups.notCounted;
+      if (notCounted.length) console.warn(`  [Roles] booked hours but neither Esti nor LMT: ${notCounted.join(', ')}`);
+    } catch (err) {
+      console.error(`  [Roles] failed: ${err.message}`);
+    }
+
     for (const account of STAFF_GROUP_ACCOUNTS) {
       try {
+        if (!groups) throw new Error('staff roles unavailable');
+        account.staffIds = groups[account.role];
+        if (!account.staffIds.length) throw new Error(`no ${account.role} staff found`);
+        // Cached completed months were computed for a particular set of staff —
+        // recompute them if the group's membership changed since.
+        const sig = [...account.staffIds].sort((a, b) => a - b).join(',');
+        const gc = cache.businesses[account.locationKey];
+        if (gc && gc.staffSig !== sig) {
+          console.log(`  [${account.label}] membership changed — dropping cached months`);
+          gc.periods = {};
+        }
         groupData.push(await scrapeAccount(browser, account, cache));
+        cache.businesses[account.locationKey].staffSig = sig;
       } catch (err) {
         console.error(`ERROR scraping ${account.label}: ${err.message}`);
         errors.push({ account: `Skin & Sage ${account.label}`, error: err.message });
@@ -1029,13 +1088,6 @@ async function main() {
       }
     }
 
-    try {
-      unclassified = await findUnclassifiedStaff(browser, ACCOUNTS.find(a => a.key === 'skinsage'),
-        new Set(SKINSAGE_STAFF.map(s => s.name)));
-      if (unclassified.length) console.warn(`  [Staff check] not in staffGroups.js: ${unclassified.join(', ')}`);
-    } catch (err) {
-      console.error(`  [Staff check] failed: ${err.message}`);
-    }
   } finally {
     await browser.close();
   }
@@ -1043,8 +1095,8 @@ async function main() {
   saveCache(cache);
 
   const generatedAt = new Date().toISOString();
-  const notices = unclassified.length
-    ? [`Skin &amp; Sage team page: <b>${unclassified.join(', ')}</b> had booked hours but isn't assigned Esti or LMT in src/staffGroups.js — left out of both columns until added.`]
+  const notices = notCounted.length
+    ? [`Skin &amp; Sage team page: <b>${notCounted.join(', ')}</b> had booked hours but no Signature Facial or massage services in Mangomint, so they're counted in neither the Esti nor the LMT column.`]
     : [];
 
   const html = generateHtml({
