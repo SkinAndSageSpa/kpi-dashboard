@@ -698,6 +698,10 @@ const TEAM_STYLES = `
   grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
   gap: 14px;
 }
+.team-grid.single {
+  max-width: 640px;
+  margin: 0 auto;
+}
 .team-note {
   margin-top: 4px;
 }
@@ -989,7 +993,7 @@ ${TEAM_STYLES}
   <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
 </header>
 
-<div class="team-grid" style="--cols:${columns}">
+<div class="team-grid${columns === 1 ? ' single' : ''}" style="--cols:${columns}">
 ${rendered}
 </div>
 

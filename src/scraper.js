@@ -119,8 +119,8 @@ const DEFAULT_METRICS = ['sales', 'util', 'ret'];
 const LOCATION_ACCOUNTS = [
   { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna',    locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna',      locationIds: [1] },
   { key: 'skinsage', locationKey: 'skinsage_queenanne', label: 'Skin & Sage Queen Anne', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Queen Anne',   locationIds: [2], openedPeriod: '2026-09' },
-  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2], metrics: ['sales', 'util', 'ret', 'pps'] },
-  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1], metrics: ['sales', 'util', 'ret', 'pps'] },
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2] },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1] },
 ];
 
 // Per-role scrapes for the Skin & Sage employee page: same flow again, but each
@@ -1214,8 +1214,8 @@ async function main() {
 
   // Manager pages. KPIs: Client Retention, Product Sales per Service, Supply Cost %
   // (accountant's sheet), Bookable Hours. Skin & Sage: one column per role, quarterly
-  // view. WAXON: business total + each location, monthly view (supply cost is
-  // business-wide only, so it's shown on the All Locations panel).
+  // view. WAXON: one combined panel for both locations, monthly view (Morgan doesn't
+  // want WAXON broken out by location).
   const byKey = Object.fromEntries([...businessData, ...locationData, ...groupData].map(d => [d.key, d]));
   const missing = (key, label) => byKey[key] || { key, label, error: 'No data', periods: [] };
   const teamPages = [
@@ -1233,14 +1233,12 @@ async function main() {
     {
       out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),
       title: 'WAXON Team',
-      columns: 3,
+      columns: 1,
       view: 'monthly',
       panels: [
-        { data: withSupply({ ...missing('waxon', 'WAXON'), label: 'All Locations' }, 'waxon'), supply: true },
-        { data: { ...missing('waxon_belltown', 'Belltown'), label: 'Belltown' } },
-        { data: { ...missing('waxon_capitol_hill', 'Capitol Hill'), label: 'Capitol Hill' } },
+        { data: withSupply(missing('waxon', 'WAXON'), 'waxon'), supply: true },
       ],
-      note: 'Monthly goals · headline = month to date · supply cost is tracked for WAXON as a whole',
+      note: 'Monthly goals · Belltown and Capitol Hill combined · headline = month to date',
     },
   ];
   for (const t of teamPages) {
