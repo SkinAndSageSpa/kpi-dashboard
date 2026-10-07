@@ -1236,7 +1236,7 @@ async function main() {
   const teamPages = [
     {
       out: process.env.TEAM_SKINSAGE_OUT || path.join(__dirname, '..', 'team-skinsage.html'),
-      title: 'Skin &amp; Sage Team',
+      title: 'Skin &amp; Sage',
       columns: 2,
       view: 'quarterly',
       panels: [
@@ -1248,7 +1248,7 @@ async function main() {
     },
     {
       out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),
-      title: 'WAXON Team',
+      title: 'WAXON',
       columns: 1,
       view: 'monthly',
       panels: [

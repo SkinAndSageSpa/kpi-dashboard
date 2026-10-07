@@ -698,6 +698,9 @@ const TEAM_STYLES = `
   grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
   gap: 14px;
 }
+.tracker-head { display: flex; flex-direction: column; }
+.tracker-kicker { font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--rose); }
+.tracker-head h1 { font-size: 24px; }
 .team-grid.single {
   max-width: 640px;
   margin: 0 auto;
@@ -1067,7 +1070,7 @@ function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '',
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>
+<title>${title} — Performance &amp; Bonus Tracker</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&display=swap" rel="stylesheet">
 <style>
 ${STYLES}
@@ -1077,7 +1080,10 @@ ${TEAM_STYLES}
 <body>
 
 <header>
-  <h1>${title}</h1>
+  <div class="tracker-head">
+    <span class="tracker-kicker">${title}</span>
+    <h1>Performance &amp; Bonus Tracker</h1>
+  </div>
   <span class="gen-time">Updated ${fmtDate(generatedAt)}</span>
 </header>
 
