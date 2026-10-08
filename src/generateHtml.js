@@ -959,6 +959,9 @@ function managerPanel({ data, supply = false }, view, goalColors = false) {
     label: 'Client Retention', health: rh, tag,
     currentDisplay: head.retention === null || head.retention === undefined ? '—' : Math.round(head.retention) + '%',
     chart: retentionChart(series, rh, CHART_SLOTS),
+    projRow: view === 'quarterly'
+      ? 'Each month uses a rolling 60-day window · quarter = average of its months'
+      : 'Each month uses a rolling 60-day window',
   });
 
   const ph = goalColors ? goalHealth('productPerSale', head.productPerSale, prior.productPerSale)
