@@ -1063,6 +1063,9 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
 </div>`;
 }
 
+// Short team names for the Skin & Sage bonus titles.
+const bonusWho = label => ({ Estheticians: 'Esti', 'Massage Therapists': 'LMT' })[label] || label;
+
 // Final payout for the period that just closed (last month / last quarter vs the one
 // before it), shown small at the bottom of the page. Same rules as the banner; a
 // goal with no data counts as $0.
@@ -1084,11 +1087,11 @@ function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '',
     if (bonusPerGoal && pnl.data && !pnl.data.error && pnl.data.periods?.length) {
       const { head, prior } = viewSeries(pnl.data.periods, view);
       banner = view === 'quarterly'
-        ? bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${head.label} ${pnl.data.label} bonus`, basis: 'quarter to date vs last quarter' })
+        ? bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${head.label} ${bonusWho(pnl.data.label)} Manager Bonus`, basis: 'quarter to date vs last quarter' })
         : bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${monthAbbrev(head.label || '')} manager bonus`, basis: 'month to date vs last month' });
       const { closed, closedPrior } = viewSeries(pnl.data.periods, view);
       if (closed) payouts.push(payoutLine(closed, closedPrior, bonusPerGoal, view === 'quarterly'
-        ? `${closed.label} ${pnl.data.label} bonus payout`
+        ? `${closed.label} ${bonusWho(pnl.data.label)} Manager Bonus payout`
         : `${monthAbbrev(closed.label || '')} manager bonus payout`));
     }
     return `<div class="team-col">${banner}${managerPanel(pnl, view, !!bonusPerGoal)}</div>`;
