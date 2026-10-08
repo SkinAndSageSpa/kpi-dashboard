@@ -726,6 +726,8 @@ const TEAM_STYLES = `
 .goal.missed  { background: var(--rose-bg);  color: var(--rose); }
 .goal.pending { background: var(--faint);    color: var(--muted); }
 .bonus-note { margin-top: 8px; font-size: 10px; color: var(--muted); }
+.payouts { margin: 20px auto 0; display: flex; flex-direction: column; gap: 4px; align-items: center; font-size: 11px; color: var(--muted); text-align: center; }
+.payout b { color: var(--text); font-weight: 600; }
 @media (max-width: 760px) {
   body { padding: 12px 16px; }
   .bonus-goals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -906,7 +908,8 @@ function quarterPoint(months, label) {
 // Returns { series (newest first, for the charts), head (headline point), prior (comparison point), tag }.
 function viewSeries(periods, view) {
   if (view !== 'quarterly') {
-    return { series: periods, head: periods[0] || {}, prior: periods[1] || {}, tag: 'mtd' };
+    return { series: periods, head: periods[0] || {}, prior: periods[1] || {}, tag: 'mtd',
+             closed: periods[1] || null, closedPrior: periods[2] || {} };
   }
   const cur = quarterOfLabel(periods[0]?.label);
   if (!cur) return { series: periods, head: periods[0] || {}, prior: periods[1] || {}, tag: 'mtd' };
@@ -915,7 +918,11 @@ function viewSeries(periods, view) {
   const thisMonths = periods.filter(p => inQ(p, cur));
   const lastMonths = periods.filter(p => inQ(p, prevQ));
   const lastPoint  = quarterPoint(lastMonths, `Q${prevQ.q}`);
+  const prev2Q = prevQ.q === 1 ? { q: 4, year: prevQ.year - 1 } : { q: prevQ.q - 1, year: prevQ.year };
+  const prev2Months = periods.filter(p => inQ(p, prev2Q));
   return {
+    closed:      lastMonths.length ? lastPoint : null,
+    closedPrior: quarterPoint(prev2Months, `Q${prev2Q.q}`),
     series: [...thisMonths, lastPoint],
     head:   quarterPoint(thisMonths, `Q${cur.q}`),
     prior:  lastPoint,
@@ -1021,9 +1028,9 @@ function managerPanel({ data, supply = false }, view, goalColors = false) {
 //   bookable hours — maintain or increase               (cur >= prior)
 // A goal with a missing figure (e.g. this month's supply cost not in the sheet
 // yet) is "pending" — neither counted nor treated as missed.
-function bonusBanner(cur, prior, perGoal, { title, basis }) {
+function bonusGoals(cur, prior) {
   const pct0 = v => Math.round(v) + '%';
-  const goals = [
+  return [
     { name: 'Client retention',    k: 'retention',      fmt: pct0 },
     { name: 'Product / service',   k: 'productPerSale', fmt: dollars2 },
     { name: 'Supply costs',        k: 'supplyPct',      fmt: v => v.toFixed(1) + '%' },
@@ -1035,6 +1042,10 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
     const detail = status !== 'pending' ? `${g.fmt(c)} vs ${g.fmt(p)}` : (!known(c) ? 'not entered for this period' : 'none for prior period');
     return { ...g, status, detail };
   });
+}
+
+function bonusBanner(cur, prior, perGoal, { title, basis }) {
+  const goals = bonusGoals(cur, prior);
   const earned  = goals.filter(g => g.status === 'met').length * perGoal;
   const pending = goals.filter(g => g.status === 'pending').length * perGoal;
   const max     = goals.length * perGoal;
@@ -1052,10 +1063,22 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
 </div>`;
 }
 
+// Final payout for the period that just closed (last month / last quarter vs the one
+// before it), shown small at the bottom of the page. Same rules as the banner; a
+// goal with no data counts as $0.
+function payoutLine(closed, closedPrior, perGoal, title) {
+  if (!closed) return '';
+  const goals  = bonusGoals(closed, closedPrior);
+  const earned = goals.filter(g => g.status === 'met').length * perGoal;
+  const mark   = { met: '✓', missed: '✗', pending: '—' };
+  return `<div class="payout"><b>${title}: $${earned}</b> of $${goals.length * perGoal} &nbsp;·&nbsp; ${goals.map(g => `<span title="${g.detail}">${g.name} ${mark[g.status]}</span>`).join(' · ')}</div>`;
+}
+
 // Manager-facing page: one business's panels side by side, no refresh button
 // (that needs a GitHub token) and no cross-business data.
 //   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
 function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null }) {
+  const payouts = [];
   const rendered = panels.map(pnl => {
     let banner = '';
     if (bonusPerGoal && pnl.data && !pnl.data.error && pnl.data.periods?.length) {
@@ -1063,6 +1086,10 @@ function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '',
       banner = view === 'quarterly'
         ? bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${head.label} ${pnl.data.label} bonus`, basis: 'quarter to date vs last quarter' })
         : bonusBanner(head, prior, bonusPerGoal, { title: `Projected ${monthAbbrev(head.label || '')} manager bonus`, basis: 'month to date vs last month' });
+      const { closed, closedPrior } = viewSeries(pnl.data.periods, view);
+      if (closed) payouts.push(payoutLine(closed, closedPrior, bonusPerGoal, view === 'quarterly'
+        ? `${closed.label} ${pnl.data.label} bonus payout`
+        : `${monthAbbrev(closed.label || '')} manager bonus payout`));
     }
     return `<div class="team-col">${banner}${managerPanel(pnl, view, !!bonusPerGoal)}</div>`;
   }).join('\n');
@@ -1093,6 +1120,8 @@ ${TEAM_STYLES}
 <div class="team-grid${columns === 1 ? ' single' : ''}" style="--cols:${columns}">
 ${rendered}
 </div>
+
+${payouts.length ? `<div class="payouts">${payouts.join('\n')}</div>` : ''}
 
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}

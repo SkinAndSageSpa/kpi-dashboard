@@ -131,8 +131,8 @@ const LOCATION_ACCOUNTS = [
 // utilization hours exactly, and to within ~0.3% (sales) / ~1% (retention clients)
 // since a sale or client shared by two providers counts for each of them.
 const STAFF_GROUP_ACCOUNTS = [
-  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 6, role: 'esti', staffIds: null, metrics: ['util', 'ret', 'pps'] },
-  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 6, role: 'lmt',  staffIds: null, metrics: ['util', 'ret', 'pps'] },
+  { key: 'skinsage', locationKey: 'skinsage_esti', label: 'Estheticians',       locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 9, role: 'esti', staffIds: null, metrics: ['util', 'ret', 'pps'] },
+  { key: 'skinsage', locationKey: 'skinsage_lmt',  label: 'Massage Therapists', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 9, role: 'lmt',  staffIds: null, metrics: ['util', 'ret', 'pps'] },
 ];
 
 // Narrow a harvested (all-locations) report settings object to one location.
