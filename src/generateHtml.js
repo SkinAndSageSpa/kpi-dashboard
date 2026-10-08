@@ -1029,13 +1029,13 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
     const c = cur[g.k], p = prior[g.k];
     const health = goalHealth(g.k, c, p);
     const status = health === 'neutral' ? 'pending' : health === 'green' ? 'met' : 'missed';
-    const detail = status !== 'pending' ? `${g.fmt(c)} vs ${g.fmt(p)}` : (!known(c) ? 'awaiting this month' : 'no prior month');
+    const detail = status !== 'pending' ? `${g.fmt(c)} vs ${g.fmt(p)}` : (!known(c) ? 'not entered for this period' : 'none for prior period');
     return { ...g, status, detail };
   });
   const earned  = goals.filter(g => g.status === 'met').length * perGoal;
   const pending = goals.filter(g => g.status === 'pending').length * perGoal;
   const max     = goals.length * perGoal;
-  const label   = { met: '✓ on track', missed: '✗ not yet', pending: '… pending' };
+  const label   = { met: '✓ Met', missed: '✗ Missed', pending: '— No data' };
   return `
 <div class="bonus">
   <div class="bonus-top">
@@ -1045,7 +1045,7 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
   <div class="bonus-goals">
     ${goals.map(g => `<div class="goal ${g.status}"><b>${g.name}</b>${label[g.status]} · ${g.detail}</div>`).join('\n    ')}
   </div>
-  <div class="bonus-note">$${perGoal} per goal · ${basis} · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · $${pending} pending data` : ''}</div>
+  <div class="bonus-note">$${perGoal} per goal · ${basis} · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · goals with no data count as $0` : ''}</div>
 </div>`;
 }
 
@@ -1094,7 +1094,7 @@ ${rendered}
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
   Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; ${bonusPerGoal
-    ? `Colors = bonus goal vs last ${period}: green met · red not met · grey pending (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
+    ? `Colors = bonus goal vs last ${period}: green met · red missed · grey no data (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
     : `Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)`}
 </footer>
 
