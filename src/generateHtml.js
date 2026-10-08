@@ -1054,12 +1054,12 @@ function bonusBanner(cur, prior, perGoal, { title, basis }) {
 <div class="bonus">
   <div class="bonus-top">
     <span class="bonus-label">${title}</span>
-    <span class="bonus-amount">$${earned}<small>of $${max}</small></span>
+    <span class="bonus-amount">$${earned}${pending ? '+' : ''}<small>of $${max}</small></span>
   </div>
   <div class="bonus-goals">
     ${goals.map(g => `<div class="goal ${g.status}"><b>${g.name}</b>${label[g.status]} · ${g.detail}</div>`).join('\n    ')}
   </div>
-  <div class="bonus-note">$${perGoal} per goal · ${basis} · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · goals with no data count as $0` : ''}</div>
+  <div class="bonus-note">$${perGoal} per goal · ${basis} · retention, product/service: increase · supply costs: reduction · bookable hours: maintain or increase${pending ? ` · + = up to $${pending} more once missing data is in` : ''}</div>
 </div>`;
 }
 
@@ -1071,7 +1071,7 @@ function payoutLine(closed, closedPrior, perGoal, title) {
   const goals  = bonusGoals(closed, closedPrior);
   const earned = goals.filter(g => g.status === 'met').length * perGoal;
   const mark   = { met: '✓', missed: '✗', pending: '—' };
-  return `<div class="payout"><b>${title}: $${earned}</b> of $${goals.length * perGoal} &nbsp;·&nbsp; ${goals.map(g => `<span title="${g.detail}">${g.name} ${mark[g.status]}</span>`).join(' · ')}</div>`;
+  return `<div class="payout"><b>${title}: $${earned}${goals.some(g => g.status === 'pending') ? '+' : ''}</b> of $${goals.length * perGoal} &nbsp;·&nbsp; ${goals.map(g => `<span title="${g.detail}">${g.name} ${mark[g.status]}</span>`).join(' · ')}</div>`;
 }
 
 // Manager-facing page: one business's panels side by side, no refresh button
