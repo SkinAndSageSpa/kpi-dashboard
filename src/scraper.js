@@ -94,12 +94,13 @@ const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || '/tmp/kpi-screenshots';
 // Business-level (2-column) panels show 3 historic months + current; location
 // panels show 2 historic + current — same fetch/calc code, just fewer months back.
 const ACCOUNTS = [
-  { key: 'skinsage', label: 'Skin & Sage', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4 },
-  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4, metrics: ['sales', 'util', 'ret', 'pps'] },
+  { key: 'skinsage', label: 'Skin & Sage', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', monthsBack: 4, metrics: ['sales', 'util', 'ret', 'mem'] },
+  { key: 'waxon',    label: 'WAXON',       locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    monthsBack: 4, metrics: ['sales', 'util', 'ret', 'pps', 'mem'] },
 ];
 
 // Metrics an account scrape fetches (default: the owner dashboard's three).
 // 'pps' = BI Sales "Avg Product Total Per Sale" — only the manager pages show it.
+// 'mem' = Membership Payments counts per membership name — owner page only.
 const DEFAULT_METRICS = ['sales', 'util', 'ret'];
 
 // Per-location scrapes: same flow, but each report's settings URL gets its
@@ -921,6 +922,52 @@ async function fetchSupplyCosts() {
 
 // ── Account scraper ───────────────────────────────────────────────────────────
 
+/**
+ * Membership Payments → payments per membership name for one month. Each active
+ * membership bills once a month, so a completed month's count = memberships active
+ * that month; the current month is MTD (only those billed so far).
+ * Report text (probe6, 2026-10-23), tab-separated:
+ *   Name | Total | New | Sales
+ *   Sage Signature Membership | 157 | 13 | $21,195.00
+ *   Total | 172 | 15 | $24,133.00
+ * reportUrl comes from one Generate per account (see membershipReportUrl in
+ * scrapeAccount); its settings already cover all locations.
+ */
+async function fetchMemberships(page, reportUrl, monthsAgo, isCurrent) {
+  const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
+  const url = new URL(reportUrl);
+  const settings = JSON.parse(url.searchParams.get('settings') || '{}');
+  settings.timePeriodStart        = win.start;
+  settings.timePeriodEndExclusive = win.endExclusive;
+  url.searchParams.set('settings', JSON.stringify(settings));
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const result = parseMemberships(await p.evaluate(() => document.body?.innerText || ''));
+    console.log(`  [Memberships] ${win.start}..${win.endExclusive}: ${result.total} ${JSON.stringify(result.byName)}`);
+    return result;
+  } finally {
+    await p.close();
+  }
+}
+
+function parseMemberships(text) {
+  const lines = text.split('\n');
+  const head = lines.findIndex(l => /^Name\tTotal\tNew\tSales/.test(l));
+  if (head < 0) throw new Error(`Membership Payments header not found. First lines: ${lines.slice(0, 4).join(' | ')}`);
+  const byName = {};
+  let total = null;
+  for (const line of lines.slice(head + 1)) {
+    const [name, count] = parseRow(line);
+    if (name === 'Total') { total = parseInt(count, 10) || 0; break; }
+    if (name) byName[name] = parseInt(count, 10) || 0;
+  }
+  if (total === null) throw new Error('Membership Payments total row not found');
+  return { total, byName };
+}
+
 // New browser context logged into an account's Mangomint via its cookie secret.
 // Returns { context, page, base }; throws if the cookies have expired.
 async function openAccount(browser, account) {
@@ -985,6 +1032,13 @@ async function scrapeAccount(browser, account, cache) {
   const metrics = account.metrics || DEFAULT_METRICS;
   const bizCache = cache.businesses[cacheKey] || (cache.businesses[cacheKey] = { periods: {} });
 
+  let memUrl = null;
+  const membershipReportUrl = async () => memUrl || (memUrl =
+    await generateReportUrl(page, base, 'Membership Payments', '/api/v1/reports/membership-payments', false));
+  const getMemberships = p => metrics.includes('mem')
+    ? withRetry(async () => fetchMemberships(page, await membershipReportUrl(), p.monthsAgo, p.isCurrent), 'Memberships')
+    : null;
+
   for (const p of periods) {
     const key    = periodKey(p.monthsAgo);
     const prefix = `${cacheKey}_${p.pickerLabel.replace(/\s/g, '_')}`;
@@ -992,6 +1046,12 @@ async function scrapeAccount(browser, account, cache) {
 
     // A month cached before 'pps' existed lacks productPerSale — refetch it once.
     const cached = bizCache.periods[key];
+    // Likewise a month cached before 'mem' existed lacks memberships — add just that.
+    if (!p.isCurrent && cached && metrics.includes('mem') && !cached.memberships) {
+      console.log(`  Cached ${key} has no memberships — fetching memberships only`);
+      const m = await getMemberships(p);
+      if (m) cached.memberships = m;
+    }
     if (!p.isCurrent && cached && cached.retentionMethod !== RETENTION_METHOD
         && (!metrics.includes('pps') || 'productPerSale' in cached)) {
       console.log(`  Cached ${key} has ${cached.retentionMethod || 'quarter-start'} retention — re-fetching retention only`);
@@ -1030,6 +1090,7 @@ async function scrapeAccount(browser, account, cache) {
       : null;
     const productPerSale    = ppsResult?.productPerSale ?? null;
     const productSalesCount = ppsResult?.salesCount ?? null;
+    const memberships       = await getMemberships(p);
 
     const daysElapsed = p.isCurrent ? dayOfMonth() : null;
     const totalDays   = p.isCurrent ? daysInMonth(0) : null;
@@ -1041,11 +1102,13 @@ async function scrapeAccount(browser, account, cache) {
 
     const periodData = { sales, projectedSales, utilization, availableHours, retention, existingRetPct, newRetPct, retentionMethod: RETENTION_METHOD };
     if (metrics.includes('pps')) Object.assign(periodData, { productPerSale, productSalesCount });
+    if (metrics.includes('mem')) periodData.memberships = memberships;
     // Only cache a completed month once every metric actually came back —
     // otherwise a transient failure (e.g. a stuck overlay blocking a click)
     // gets baked in as permanent nulls until the cache schema version bumps.
     const complete = (!metrics.includes('sales') || sales !== null) && utilization !== null && retention !== null
-      && (!metrics.includes('pps') || productPerSale !== null);
+      && (!metrics.includes('pps') || productPerSale !== null)
+      && (!metrics.includes('mem') || memberships !== null);
     if (!p.isCurrent && complete) bizCache.periods[key] = periodData;
 
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
