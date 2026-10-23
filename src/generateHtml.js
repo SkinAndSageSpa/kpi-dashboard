@@ -264,6 +264,100 @@ function retentionChart(periods, health, minSlots = 0) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${legend}${els}</svg>`;
 }
 
+// Membership stack colors, in slot order (biggest membership first). Validated with
+// the dataviz palette checker on white: adjacent CVD ΔE ≥ 9.2, normal-vision ≥ 24.5;
+// gold is <3:1 contrast, so the legend always prints each count. Kept clear of the
+// health colors (green/amber/rose). A 5th+ membership folds into neutral "Other".
+const MEM_COLORS = ['#3f78c0', '#d29a1e', '#9a4f9a', '#1f9a8a'];
+const MEM_OTHER  = '#cbbdb8';
+
+const escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const memShort = name => name.replace(/\s+Membership$/i, '');
+
+// Membership names → series, biggest first by count across the shown months, so a
+// membership keeps its color month to month. Returns [{ name, color, names }].
+function membershipSeries(periods) {
+  const sums = {};
+  for (const p of periods) {
+    for (const [n, c] of Object.entries(p?.memberships?.byName || {})) sums[n] = (sums[n] || 0) + c;
+  }
+  const names = Object.keys(sums).sort((a, b) => sums[b] - sums[a]);
+  const fold = names.length > MEM_COLORS.length;
+  const kept = fold ? names.slice(0, MEM_COLORS.length - 1) : names;
+  const series = kept.map((n, i) => ({ name: n, color: MEM_COLORS[i], names: [n] }));
+  if (fold) series.push({ name: 'Other', color: MEM_OTHER, names: names.slice(kept.length) });
+  return series;
+}
+
+// Stacked bars: one per month (oldest left), one segment per membership, total on top.
+// Same geometry as bigChart. idPrefix keeps clip-path ids unique per panel.
+function membershipChart(periods, series, idPrefix) {
+  const n = periods.length;
+  const pad = 8;
+  const barW = 46, gap = 12;
+  const W = n * barW + (n - 1) * gap + pad * 2, H = 100;
+  const maxBarH = 64;
+  const botY = 80;
+  const labY = 95;
+  const segGap = 2;
+
+  const totals = periods.map(p => p?.memberships?.total ?? null);
+  const maxVal = Math.max(...totals.filter(v => v !== null), 1);
+
+  const els = periods.map((p, i) => {
+    const pos = (n - 1) - i;
+    const x = pad + pos * (barW + gap);
+    const cx = (x + barW / 2).toFixed(1);
+    const isCur = i === 0;
+    const total = totals[i];
+    const mon = monthAbbrev(p?.label || '');
+    let out = '';
+
+    if (!total) {
+      out += `<rect x="${x.toFixed(1)}" y="${botY - 5}" width="${barW}" height="5" rx="5" fill="#e8ddd9"/>`;
+    } else {
+      const counts = series.map(s => s.names.reduce((a, nm) => a + (p.memberships.byName[nm] || 0), 0));
+      const barH = Math.max(6, Math.round((total / maxVal) * maxBarH));
+      const topY = botY - barH;
+      const breakdown = series.map((s, k) => counts[k] ? `${memShort(s.name)}: ${counts[k]}` : '').filter(Boolean).join('\n');
+      const clip = `${idPrefix}-mem-${i}`;
+      out += `<clipPath id="${clip}"><rect x="${x.toFixed(1)}" y="${topY}" width="${barW}" height="${barH}" rx="5"/></clipPath>`;
+      out += `<g clip-path="url(#${clip})">`;
+      // Bottom-up, biggest membership at the base; 2px surface gap between segments.
+      let y = botY;
+      series.forEach((s, k) => {
+        if (!counts[k]) return;
+        const h = Math.max(2, (counts[k] / total) * barH);
+        out += `<rect x="${x.toFixed(1)}" y="${(y - h).toFixed(1)}" width="${barW}" height="${h.toFixed(1)}" fill="${s.color}"><title>${mon} · ${escHtml(memShort(s.name))}: ${counts[k]}</title></rect>`;
+        y -= h;
+        if (y > topY) out += `<rect x="${x.toFixed(1)}" y="${(y - segGap).toFixed(1)}" width="${barW}" height="${segGap}" fill="#ffffff"/>`;
+        y -= segGap;
+      });
+      out += `</g>`;
+      // Hover target over the whole column (incl. tiny segments) with the full breakdown.
+      out += `<rect x="${x.toFixed(1)}" y="${topY - 18}" width="${barW}" height="${barH + 18}" fill="transparent"><title>${mon}${isCur ? ' (so far)' : ''} · ${total} total\n${escHtml(breakdown)}</title></rect>`;
+      const col = isCur ? '#3c2f2a' : '#b09088';
+      const fw  = isCur ? '600' : '400';
+      out += `<text x="${cx}" y="${topY - 6}" text-anchor="middle" font-size="10" fill="${col}" font-weight="${fw}" pointer-events="none">${total}</text>`;
+    }
+
+    out += `<text x="${cx}" y="${labY}" text-anchor="middle" font-size="10" fill="#b09088">${mon}</text>`;
+    return out;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible" role="img" aria-label="Active memberships by month, stacked by membership">${els}</svg>`;
+}
+
+// Legend under the membership chart: swatch, name and this month's count.
+// One membership needs no swatch — the line just names it.
+function membershipLegend(series, cur) {
+  if (!series.length) return '';
+  const count = s => s.names.reduce((a, nm) => a + (cur?.memberships?.byName?.[nm] || 0), 0);
+  const swatch = s => series.length > 1 ? `<i style="background:${s.color}"></i>` : '';
+  return `<div class="mem-legend">${series.map(s =>
+    `<span>${swatch(s)}${escHtml(memShort(s.name))} <strong>${count(s)}</strong></span>`).join('')}</div>`;
+}
+
 function kpiCard({ label, currentDisplay, health, chart, projRow, mtd = false, tag = mtd ? 'mtd' : '' }) {
   const mtdTag = tag ? `<span class="mtd-tag">${tag}</span>` : '';
   return `
@@ -333,6 +427,18 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
+  // No health color: the current month is only what's billed so far, so comparing
+  // it to last month's full count would read as a drop for most of the month.
+  const memSeries = membershipSeries(periods);
+  const memCard = periods.some(p => p?.memberships) ? kpiCard({
+    label: 'Memberships',
+    health: 'neutral',
+    currentDisplay: cur?.memberships ? String(cur.memberships.total) : '—',
+    chart: membershipChart(periods, memSeries, biz.key),
+    projRow: membershipLegend(memSeries, cur),
+    mtd: true,
+  }) : '';
+
   const signals = [sh, uh, rh].filter(h => h !== 'neutral');
   const overall = signals.includes('red') ? 'red'
     : signals.includes('amber') ? 'amber'
@@ -350,6 +456,7 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
         ${salesCard}
         ${utilCard}
         ${retCard}
+        ${memCard}
       </div>
     </div>`;
 }
@@ -683,6 +790,10 @@ header h1 {
 }
 .proj-row strong { color: var(--text); font-weight: 500; }
 
+.mem-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 12px; }
+.mem-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.mem-legend i { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
 footer {
   margin-top: 8px;
   font-size: 10px;
@@ -775,7 +886,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = membership payments that month, by membership (current month = billed so far) &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
 </footer>
 
 <script>
