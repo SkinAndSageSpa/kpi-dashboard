@@ -693,6 +693,7 @@ footer {
 
 // Extra rules for the employee pages only (owner page never uses these classes).
 const TEAM_STYLES = `
+.team-notice { margin: 10px 0 0; }
 .team-grid {
   display: grid;
   grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
@@ -1080,7 +1081,7 @@ function payoutLine(closed, closedPrior, perGoal, title) {
 // Manager-facing page: one business's panels side by side, no refresh button
 // (that needs a GitHub token) and no cross-business data.
 //   panels: [{ data, supply }]   view: 'monthly' | 'quarterly'
-function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null }) {
+function generateTeamHtml({ title, columns, panels, view = 'monthly', note = '', generatedAt, bonusPerGoal = null, notices = [] }) {
   const payouts = [];
   const rendered = panels.map(pnl => {
     let banner = '';
@@ -1132,6 +1133,8 @@ ${payouts.length ? `<div class="payouts">${payouts.join('\n')}</div>` : ''}
     ? `Colors = bonus goal vs last ${period}: green met · red missed · grey no data (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
     : `Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)`}
 </footer>
+
+${notices.map(n => `<div class="error-banner team-notice">${n}</div>`).join('\n')}
 
 </body>
 </html>`;

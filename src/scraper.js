@@ -1215,12 +1215,13 @@ async function main() {
     : data;
 
   const generatedAt = new Date().toISOString();
-  const notices = notCounted.length
-    ? [`Skin &amp; Sage team page: <b>${notCounted.join(', ')}</b> had booked hours but no Signature Facial or massage services in Mangomint, so they're counted in neither the Esti nor the LMT column.`]
+  // Shown at the bottom of the Skin & Sage team page (not the owner page).
+  const roleNotices = notCounted.length
+    ? [`<b>${notCounted.join(', ')}</b> had booked hours but no Signature Facial or massage services in Mangomint, so they're counted in neither the Esti nor the LMT column.`]
     : [];
 
   const html = generateHtml({
-    businesses: businessData, locations: locationData, generatedAt, errors, notices,
+    businesses: businessData, locations: locationData, generatedAt, errors,
   });
 
   const outFile = process.env.DASHBOARD_OUT || path.join(__dirname, '..', 'dashboard.html');
@@ -1245,6 +1246,7 @@ async function main() {
       ],
       note: 'Each column counts only that role’s providers, at both locations · Quarterly goals: last quarter, then each month this quarter · headline = quarter to date',
       bonusPerGoal: 125, // one bonus per column (Esti team, LMT team): up to $500/quarter each
+      notices: roleNotices,
     },
     {
       out: process.env.TEAM_WAXON_OUT || path.join(__dirname, '..', 'team-waxon.html'),
