@@ -1,0 +1,37 @@
+name: Probe 7 — Memberships Started/Cancellations
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROBE_DIR: /tmp/probe7-results
+      SKINSAGE_MANGOMINT_COOKIES: ${{ secrets.SKINSAGE_MANGOMINT_COOKIES }}
+      WAXON_MANGOMINT_COOKIES: ${{ secrets.WAXON_MANGOMINT_COOKIES }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run probe7
+        run: node src/probe7.js
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe7-results
+          path: /tmp/probe7-results/
+          retention-days: 7
