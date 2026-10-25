@@ -946,7 +946,7 @@ async function fetchMemberships(page, reportUrl, monthsAgo, isCurrent) {
     await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(3000);
     const result = parseMemberships(await p.evaluate(() => document.body?.innerText || ''));
-    console.log(`  [Memberships] ${win.start}..${win.endExclusive}: ${result.total} ${JSON.stringify(result.byName)}`);
+    console.log(`  [Memberships] ${win.start}..${win.endExclusive}: ${result.total} (${result.new} new) ${JSON.stringify(result.byName)}`);
     return result;
   } finally {
     await p.close();
@@ -958,14 +958,14 @@ function parseMemberships(text) {
   const head = lines.findIndex(l => /^Name\tTotal\tNew\tSales/.test(l));
   if (head < 0) throw new Error(`Membership Payments header not found. First lines: ${lines.slice(0, 4).join(' | ')}`);
   const byName = {};
-  let total = null;
+  let total = null, newCount = null;
   for (const line of lines.slice(head + 1)) {
-    const [name, count] = parseRow(line);
-    if (name === 'Total') { total = parseInt(count, 10) || 0; break; }
+    const [name, count, newCol] = parseRow(line);
+    if (name === 'Total') { total = parseInt(count, 10) || 0; newCount = parseInt(newCol, 10) || 0; break; }
     if (name) byName[name] = parseInt(count, 10) || 0;
   }
   if (total === null) throw new Error('Membership Payments total row not found');
-  return { total, byName };
+  return { total, new: newCount, byName };
 }
 
 // New browser context logged into an account's Mangomint via its cookie secret.
@@ -1046,8 +1046,8 @@ async function scrapeAccount(browser, account, cache) {
 
     // A month cached before 'pps' existed lacks productPerSale — refetch it once.
     const cached = bizCache.periods[key];
-    // Likewise a month cached before 'mem' existed lacks memberships — add just that.
-    if (!p.isCurrent && cached && metrics.includes('mem') && !cached.memberships) {
+    // Likewise a month cached before 'mem' (or its new-memberships count) existed — add just that.
+    if (!p.isCurrent && cached && metrics.includes('mem') && cached.memberships?.new == null) {
       console.log(`  Cached ${key} has no memberships — fetching memberships only`);
       const m = await getMemberships(p);
       if (m) cached.memberships = m;
