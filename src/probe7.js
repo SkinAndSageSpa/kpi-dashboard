@@ -1,9 +1,13 @@
 /**
  * probe7.js — Memberships Started / Memberships Cancellations inspector (read-only).
- * For each account: dumps the Reports list text, opens "Membership Payments",
- * generates it, saves the iframe URL/settings + innerText, then re-fetches it
- * with explicit date ranges (this month MTD, last month) via the same settings
- * URL rewrite the scraper uses.
+ * For each account: dumps the Reports list text, opens each report, generates it,
+ * saves the iframe URL/settings, then re-fetches it with explicit date ranges
+ * (this month MTD, last month) via the same settings URL rewrite the scraper uses.
+ *
+ * These reports list individual clients and this repo's artifacts are public, so
+ * report output is never saved raw — summarize() reduces it to column headers,
+ * row counts and per-column aggregates in the runner, and redact() scrubs any
+ * email/phone that slips through. No screenshots are taken once a report is open.
  */
 
 const { chromium } = require('playwright');
@@ -21,6 +25,65 @@ fs.mkdirSync(PROBE_DIR, { recursive: true });
 function save(name, text) {
   fs.writeFileSync(path.join(PROBE_DIR, name), String(text), 'utf8');
   console.log(`  Saved: ${name} (${String(text).length} chars)`);
+}
+
+const PII_HEADER  = /\b(client|customer|member|name|first|last|phone|mobile|cell|email|e-mail|address|note|notes|comment|comments|dob|birthday)\b/i;
+const SAFE_HEADER = /membership|plan|location|reason|status|type/i;
+const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
+const PHONE = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
+const DATE  = /^(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2} \d{1,2},? \d{4})/;
+const MONEY = /^-?\$?-?[\d,]+(\.\d+)?$/;
+
+function redact(s) {
+  return String(s).replace(EMAIL, '[email]').replace(PHONE, '[phone]');
+}
+
+// Report innerText (tab-separated rows) → aggregate-only summary. Values are only
+// listed for non-PII columns that repeat (≤15 distinct, ≤ half the row count), so
+// per-client columns never get enumerated even if their header looks harmless.
+function summarize(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const head = lines.findIndex(l => l.split('\t').length >= 3);
+  if (head < 0) return { headerFound: false, lineCount: lines.length };
+  const headers = lines[head].split('\t').map(h => h.trim());
+  const rows = [], totals = [];
+  for (const l of lines.slice(head + 1)) {
+    const cells = l.split('\t').map(c => c.trim());
+    if (cells.length < 2) continue;
+    (/^totals?$/i.test(cells[0]) ? totals : rows).push(cells);
+  }
+  const columns = headers.map((h, i) => {
+    const vals = rows.map(r => r[i] ?? '').filter(v => v !== '');
+    const col = { header: h, nonEmpty: vals.length };
+    if (PII_HEADER.test(h) && !SAFE_HEADER.test(h)) { col.redacted = true; return col; }
+    if (vals.length && vals.every(v => MONEY.test(v))) {
+      col.kind = 'number';
+      col.sum = vals.reduce((a, v) => a + (parseFloat(v.replace(/[$,]/g, '')) || 0), 0);
+      return col;
+    }
+    if (vals.length && vals.every(v => DATE.test(v))) {
+      col.kind = 'date';
+      col.perDay = {};
+      for (const v of vals) { const d = v.match(DATE)[0]; col.perDay[d] = (col.perDay[d] || 0) + 1; }
+      return col;
+    }
+    const counts = {};
+    for (const v of vals) counts[v] = (counts[v] || 0) + 1;
+    const distinct = Object.keys(counts).length;
+    col.distinct = distinct;
+    if (distinct <= 15 && distinct <= vals.length / 2) col.valueCounts = counts;
+    return col;
+  });
+  // Total row: keep only cells under columns that weren't redacted.
+  const totalRows = totals.map(t => Object.fromEntries(
+    headers.map((h, i) => [h, columns[i].redacted ? '[redacted]' : (t[i] ?? '')])));
+  return {
+    headerFound: true,
+    preamble: lines.slice(0, head).filter(l => l.length <= 80).slice(0, 8),
+    rowCount: rows.length,
+    columns,
+    totalRows,
+  };
 }
 
 function parseCookies(raw) {
@@ -103,14 +166,16 @@ async function probeAccount(browser, acct) {
         const p = await context.newPage();
         await p.goto(u.toString(), { waitUntil: 'domcontentloaded' });
         await p.waitForTimeout(4000);
-        save(`${acct.key}_${tag}_${w}.txt`, `${start}..${end}
-` + await p.evaluate(() => document.body?.innerText || ''));
+        const summary = summarize(await p.evaluate(() => document.body?.innerText || ''));
+        const out = redact(JSON.stringify({ window: `${start}..${end}`, ...summary }, null, 2));
+        save(`${acct.key}_${tag}_${w}.json`, out);
+        console.log(`  ${report} ${w}: ${summary.rowCount ?? '?'} rows, headers: ${(summary.columns || []).map(c => c.header).join(' | ')}`);
         await p.close();
       }
     }
   } catch (e) {
-    console.error(`  ${acct.key} failed: ${e.message}`);
-    await page.screenshot({ path: path.join(PROBE_DIR, `${acct.key}_error.png`), fullPage: true }).catch(() => {});
+    // No error screenshot — the page may have a generated report on it.
+    console.error(`  ${acct.key} failed: ${redact(e.message)}`);
   } finally {
     await context.close();
   }
