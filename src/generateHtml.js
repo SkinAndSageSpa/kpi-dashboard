@@ -398,8 +398,8 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  // No health color: the current month is only what's billed so far, so comparing
-  // it to last month's full count would read as a drop for most of the month.
+  // No health color (yet): the current month is now an estimate (last month's paid
+  // + started − cancelled), and falls back to billed-so-far if that fetch fails.
   const memCard = periods.some(p => p?.memberships) ? kpiCard({
     label: 'Memberships',
     health: 'neutral',
@@ -854,7 +854,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = billed so far), dot = new memberships &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
 </footer>
 
 <script>
