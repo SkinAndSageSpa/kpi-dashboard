@@ -1009,8 +1009,10 @@ async function fetchMembershipRows(page, reportUrl, win, startCol) {
   }
 }
 
-// "October 3, 2026" / "Oct 3, 2026" / "10/3/2026" / "2026-10-03" (optionally with a
-// leading weekday or trailing time) → { y, m (1-12), d }. Dates aren't client data,
+// "Tue, Sep 8" / "Oct 3, 2025" / "10/3/2026" / "2026-10-03" (optionally with a
+// leading weekday or trailing time) → { y, m (1-12), d }. Mangomint drops the year
+// for dates in the current year (seen 2026-10-25: "Tue, Sep 8"), so a yearless date
+// is this year unless that would put it in the future. Dates aren't client data,
 // so an unparseable one is safe to show in the error.
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 function parseReportDate(s) {
@@ -1018,8 +1020,14 @@ function parseReportDate(s) {
   if (m) return { y: +m[1], m: +m[2], d: +m[3] };
   m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
   if (m) return { y: m[3].length === 2 ? 2000 + +m[3] : +m[3], m: +m[1], d: +m[2] };
-  m = s.match(/([A-Za-z]{3})[a-z]*\.? (\d{1,2}),? (\d{4})/);
-  if (m && MONTHS.includes(m[1].toLowerCase())) return { y: +m[3], m: MONTHS.indexOf(m[1].toLowerCase()) + 1, d: +m[2] };
+  m = s.match(/([A-Za-z]{3})[a-z]*\.? (\d{1,2})(?:,? (\d{4}))?/);
+  if (m && MONTHS.includes(m[1].toLowerCase())) {
+    const mon = MONTHS.indexOf(m[1].toLowerCase()) + 1, d = +m[2];
+    if (m[3]) return { y: +m[3], m: mon, d };
+    const now = ptNow();
+    const future = mon > now.getMonth() + 1 || (mon === now.getMonth() + 1 && d > now.getDate());
+    return { y: now.getFullYear() - (future ? 1 : 0), m: mon, d };
+  }
   throw new Error(`unrecognized report date "${s}"`);
 }
 
