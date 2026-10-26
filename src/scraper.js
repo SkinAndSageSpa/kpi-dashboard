@@ -958,14 +958,95 @@ function parseMemberships(text) {
   const head = lines.findIndex(l => /^Name\tTotal\tNew\tSales/.test(l));
   if (head < 0) throw new Error(`Membership Payments header not found. First lines: ${lines.slice(0, 4).join(' | ')}`);
   const byName = {};
-  let total = null, newCount = null;
+  let total = null, newCount = null, internal = 0, internalNew = 0;
   for (const line of lines.slice(head + 1)) {
     const [name, count, newCol] = parseRow(line);
     if (name === 'Total') { total = parseInt(count, 10) || 0; newCount = parseInt(newCol, 10) || 0; break; }
-    if (name) byName[name] = parseInt(count, 10) || 0;
+    if (name && INTERNAL_PLAN.test(name)) { internal += parseInt(count, 10) || 0; internalNew += parseInt(newCol, 10) || 0; }
+    else if (name) byName[name] = parseInt(count, 10) || 0;
   }
   if (total === null) throw new Error('Membership Payments total row not found');
-  return { total, new: newCount, byName };
+  return { total: total - internal, new: newCount - internalNew, byName, excludesInternal: true };
+}
+
+// Staff-perk plans like "Spa Leader Benefit (internal)" aren't client memberships.
+const INTERNAL_PLAN = /\(internal\)/i;
+
+/**
+ * Memberships Started / Memberships Cancellations → one row per membership,
+ * tab-separated, no Total row (probe7, 2026-10-25):
+ *   Start Date | Client | Phone | Email | Membership Plan | Membership Status | Staff Member
+ *   Started    | Client | Phone | Email | Membership Plan | Canceled On
+ * An empty period renders just the "Period: …" line with no table. These rows
+ * carry client contact details and this repo's logs are public, so only dates
+ * and plan names are read out of them — never log or cache anything else.
+ */
+async function fetchMembershipRows(page, reportUrl, win, startCol) {
+  const url = new URL(reportUrl);
+  const settings = JSON.parse(url.searchParams.get('settings') || '{}');
+  settings.timePeriodStart        = win.start;
+  settings.timePeriodEndExclusive = win.endExclusive;
+  url.searchParams.set('settings', JSON.stringify(settings));
+
+  const p = await page.context().newPage();
+  try {
+    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(3000);
+    const lines = (await p.evaluate(() => document.body?.innerText || '')).split('\n');
+    if (!lines.some(l => l.startsWith('Period:'))) throw new Error('report did not load (no Period line)');
+    const head = lines.findIndex(l => l.startsWith(`${startCol}\t`));
+    if (head < 0) return [];
+    const cols = parseRow(lines[head]);
+    const iStart = cols.indexOf(startCol), iPlan = cols.indexOf('Membership Plan'), iCancel = cols.indexOf('Canceled On');
+    if (iPlan < 0) throw new Error(`no Membership Plan column (columns: ${cols.join(' | ')})`);
+    return lines.slice(head + 1)
+      .map(parseRow)
+      .filter(c => c.length >= cols.length && c[iStart])
+      .filter(c => !INTERNAL_PLAN.test(c[iPlan]))
+      .map(c => ({ started: c[iStart], canceled: iCancel >= 0 ? c[iCancel] : null }));
+  } finally {
+    await p.close();
+  }
+}
+
+// "October 3, 2026" / "Oct 3, 2026" / "10/3/2026" / "2026-10-03" (optionally with a
+// leading weekday or trailing time) → { y, m (1-12), d }. Dates aren't client data,
+// so an unparseable one is safe to show in the error.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function parseReportDate(s) {
+  let m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return { y: +m[1], m: +m[2], d: +m[3] };
+  m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m) return { y: m[3].length === 2 ? 2000 + +m[3] : +m[3], m: +m[1], d: +m[2] };
+  m = s.match(/([A-Za-z]{3})[a-z]*\.? (\d{1,2}),? (\d{4})/);
+  if (m && MONTHS.includes(m[1].toLowerCase())) return { y: +m[3], m: MONTHS.indexOf(m[1].toLowerCase()) + 1, d: +m[2] };
+  throw new Error(`unrecognized report date "${s}"`);
+}
+
+/**
+ * Current-month active memberships. Membership Payments MTD only counts members
+ * billed so far, so instead:
+ *   last month's paid + started MTD − cancelled MTD − last month's late cancels
+ * A late cancel is a last-month cancellation that came after that month's payment
+ * (so it's in last month's paid count but won't renew): started that same month,
+ * or cancelled on/after its monthly billing day (the start day-of-month, capped at
+ * the month's length). Internal plans are excluded throughout.
+ */
+async function currentMembershipParts(page, startedUrl, canceledUrl) {
+  const mtd  = salesMTDWindow();
+  const prev = completedMonthWindow(1);
+  const [py, pm] = prev.start.split('-').map(Number);
+  const prevDays = new Date(py, pm, 0).getDate();
+
+  const started  = await fetchMembershipRows(page, startedUrl,  mtd,  'Start Date');
+  const canceled = await fetchMembershipRows(page, canceledUrl, mtd,  'Started');
+  const prevCanc = await fetchMembershipRows(page, canceledUrl, prev, 'Started');
+  const lateCancels = prevCanc.filter(r => {
+    const s = parseReportDate(r.started), c = parseReportDate(r.canceled);
+    if (s.y === py && s.m === pm) return true;
+    return c.d >= Math.min(s.d, prevDays);
+  }).length;
+  return { started: started.length, canceled: canceled.length, lateCancels, prevCanceled: prevCanc.length };
 }
 
 // New browser context logged into an account's Mangomint via its cookie secret.
@@ -1046,8 +1127,10 @@ async function scrapeAccount(browser, account, cache) {
 
     // A month cached before 'pps' existed lacks productPerSale — refetch it once.
     const cached = bizCache.periods[key];
-    // Likewise a month cached before 'mem' (or its new-memberships count) existed — add just that.
-    if (!p.isCurrent && cached && metrics.includes('mem') && cached.memberships?.new == null) {
+    // Likewise a month cached before 'mem' (or its new-memberships count, or the
+    // internal-plan exclusion) existed — add just that.
+    if (!p.isCurrent && cached && metrics.includes('mem')
+        && (cached.memberships?.new == null || !cached.memberships.excludesInternal)) {
       console.log(`  Cached ${key} has no memberships — fetching memberships only`);
       const m = await getMemberships(p);
       if (m) cached.memberships = m;
@@ -1112,6 +1195,27 @@ async function scrapeAccount(browser, account, cache) {
     if (!p.isCurrent && complete) bizCache.periods[key] = periodData;
 
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
+  }
+
+  // Current month runs first in the loop above, before last month's paid count is
+  // known, so its active-memberships figure is filled in here. On failure it keeps
+  // the billed-so-far count.
+  const cur  = results.find(r => r.isCurrent);
+  const prev = results.find(r => r.monthsAgo === 1);
+  if (metrics.includes('mem') && cur?.memberships && prev?.memberships?.total != null) {
+    try {
+      const parts = await withRetry(async () => currentMembershipParts(page,
+        await generateReportUrl(page, base, 'Memberships Started', '/api/v1/reports/memberships-started', false),
+        await generateReportUrl(page, base, 'Memberships Cancellations', '/api/v1/reports/membership-cancellations', false)),
+        'Membership changes');
+      if (parts) {
+        const total = prev.memberships.total + parts.started - parts.canceled - parts.lateCancels;
+        console.log(`  [Memberships] current active = ${prev.memberships.total} paid last month + ${parts.started} started − ${parts.canceled} cancelled − ${parts.lateCancels} late cancels (of ${parts.prevCanceled}) = ${total} (billed so far: ${cur.memberships.total})`);
+        cur.memberships = { ...cur.memberships, billedSoFar: cur.memberships.total, total, new: parts.started, parts: { prevPaid: prev.memberships.total, ...parts } };
+      }
+    } catch (e) {
+      console.warn(`  [Memberships] current-month formula failed, keeping billed-so-far count: ${e.message}`);
+    }
   }
 
   await context.close();
