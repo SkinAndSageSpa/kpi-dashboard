@@ -36,12 +36,13 @@ function utilizationHealth(current) {
   return 'red';
 }
 
-// Panel pill (Morgan 2026-10-27): Needs Love = 2+ red cards, Watch = anything not
-// green with at most 1 red, Thriving = all green. Uncolored (neutral) cards are skipped.
+// Panel pill (Morgan 2026-10-27): Needs Love = 2+ red cards or no green cards,
+// Watch = anything else not all green, Thriving = all green. Uncolored (neutral)
+// cards are skipped.
 function overallHealth(cardHealths) {
   const signals = cardHealths.filter(h => h !== 'neutral');
   if (!signals.length) return 'neutral';
-  if (signals.filter(h => h === 'red').length >= 2) return 'red';
+  if (signals.filter(h => h === 'red').length >= 2 || !signals.includes('green')) return 'red';
   return signals.every(h => h === 'green') ? 'green' : 'amber';
 }
 
@@ -877,7 +878,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red · Needs Love = 2+ red
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green
 </footer>
 
 <script>
