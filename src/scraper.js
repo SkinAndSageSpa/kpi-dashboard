@@ -100,7 +100,8 @@ const ACCOUNTS = [
 
 // Metrics an account scrape fetches (default: the owner dashboard's three).
 // 'pps' = BI Sales "Avg Product Total Per Sale" — only the manager pages show it.
-// 'mem' = Membership Payments counts per membership name — owner page only.
+// 'mem' = Membership Payments counts per membership name — owner page business +
+// location panels (location panels narrow every membership report to their locationIds).
 const DEFAULT_METRICS = ['sales', 'util', 'ret'];
 
 // Per-location scrapes: same flow, but each report's settings URL gets its
@@ -118,10 +119,10 @@ const DEFAULT_METRICS = ['sales', 'util', 'ret'];
 //
 // openedPeriod: months before this (YYYY-MM) are shown as empty without scraping.
 const LOCATION_ACCOUNTS = [
-  { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna',    locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna',      locationIds: [1] },
-  { key: 'skinsage', locationKey: 'skinsage_queenanne', label: 'Skin & Sage Queen Anne', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Queen Anne',   locationIds: [2], openedPeriod: '2026-09' },
-  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2] },
-  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1] },
+  { key: 'skinsage', locationKey: 'skinsage_ravenna',   label: 'Skin & Sage Ravenna',    locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Ravenna',      locationIds: [1], metrics: ['sales', 'util', 'ret', 'mem'] },
+  { key: 'skinsage', locationKey: 'skinsage_queenanne', label: 'Skin & Sage Queen Anne', locationId: '560372', cookieEnv: 'SKINSAGE_MANGOMINT_COOKIES', location: 'Queen Anne',   locationIds: [2], openedPeriod: '2026-09', metrics: ['sales', 'util', 'ret', 'mem'] },
+  { key: 'waxon',    locationKey: 'waxon_belltown',     label: 'WAXON Belltown',         locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Belltown',     locationIds: [2], metrics: ['sales', 'util', 'ret', 'mem'] },
+  { key: 'waxon',    locationKey: 'waxon_capitol_hill', label: 'WAXON Capitol Hill',     locationId: '812513', cookieEnv: 'WAXON_MANGOMINT_COOKIES',    location: 'Capitol Hill', locationIds: [1], metrics: ['sales', 'util', 'ret', 'mem'] },
 ];
 
 // Per-role scrapes for the Skin & Sage employee page: same flow again, but each
@@ -933,12 +934,13 @@ async function fetchSupplyCosts() {
  * reportUrl comes from one Generate per account (see membershipReportUrl in
  * scrapeAccount); its settings already cover all locations.
  */
-async function fetchMemberships(page, reportUrl, monthsAgo, isCurrent) {
+async function fetchMemberships(page, reportUrl, monthsAgo, isCurrent, locationIds = null) {
   const win = isCurrent ? salesMTDWindow() : completedMonthWindow(monthsAgo);
   const url = new URL(reportUrl);
   const settings = JSON.parse(url.searchParams.get('settings') || '{}');
   settings.timePeriodStart        = win.start;
   settings.timePeriodEndExclusive = win.endExclusive;
+  applyLocationIds(settings, locationIds, 'Memberships');
   url.searchParams.set('settings', JSON.stringify(settings));
 
   const p = await page.context().newPage();
@@ -981,11 +983,12 @@ const INTERNAL_PLAN = /\(internal\)/i;
  * carry client contact details and this repo's logs are public, so only dates
  * and plan names are read out of them — never log or cache anything else.
  */
-async function fetchMembershipRows(page, reportUrl, win, startCol) {
+async function fetchMembershipRows(page, reportUrl, win, startCol, locationIds = null) {
   const url = new URL(reportUrl);
   const settings = JSON.parse(url.searchParams.get('settings') || '{}');
   settings.timePeriodStart        = win.start;
   settings.timePeriodEndExclusive = win.endExclusive;
+  applyLocationIds(settings, locationIds, `Memberships ${startCol}`);
   url.searchParams.set('settings', JSON.stringify(settings));
 
   const p = await page.context().newPage();
@@ -1040,15 +1043,15 @@ function parseReportDate(s) {
  * or cancelled on/after its monthly billing day (the start day-of-month, capped at
  * the month's length). Internal plans are excluded throughout.
  */
-async function currentMembershipParts(page, startedUrl, canceledUrl) {
+async function currentMembershipParts(page, startedUrl, canceledUrl, locationIds = null) {
   const mtd  = salesMTDWindow();
   const prev = completedMonthWindow(1);
   const [py, pm] = prev.start.split('-').map(Number);
   const prevDays = new Date(py, pm, 0).getDate();
 
-  const started  = await fetchMembershipRows(page, startedUrl,  mtd,  'Start Date');
-  const canceled = await fetchMembershipRows(page, canceledUrl, mtd,  'Started');
-  const prevCanc = await fetchMembershipRows(page, canceledUrl, prev, 'Started');
+  const started  = await fetchMembershipRows(page, startedUrl,  mtd,  'Start Date', locationIds);
+  const canceled = await fetchMembershipRows(page, canceledUrl, mtd,  'Started',    locationIds);
+  const prevCanc = await fetchMembershipRows(page, canceledUrl, prev, 'Started',    locationIds);
   const lateCancels = prevCanc.filter(r => {
     const s = parseReportDate(r.started), c = parseReportDate(r.canceled);
     if (s.y === py && s.m === pm) return true;
@@ -1125,7 +1128,7 @@ async function scrapeAccount(browser, account, cache) {
   const membershipReportUrl = async () => memUrl || (memUrl =
     await generateReportUrl(page, base, 'Membership Payments', '/api/v1/reports/membership-payments', false));
   const getMemberships = p => metrics.includes('mem')
-    ? withRetry(async () => fetchMemberships(page, await membershipReportUrl(), p.monthsAgo, p.isCurrent), 'Memberships')
+    ? withRetry(async () => fetchMemberships(page, await membershipReportUrl(), p.monthsAgo, p.isCurrent, locationIds), 'Memberships')
     : null;
 
   for (const p of periods) {
@@ -1214,7 +1217,7 @@ async function scrapeAccount(browser, account, cache) {
     try {
       const parts = await withRetry(async () => currentMembershipParts(page,
         await generateReportUrl(page, base, 'Memberships Started', '/api/v1/reports/memberships-started', false),
-        await generateReportUrl(page, base, 'Memberships Cancellations', '/api/v1/reports/membership-cancellations', false)),
+        await generateReportUrl(page, base, 'Memberships Cancellations', '/api/v1/reports/membership-cancellations', false), locationIds),
         'Membership changes');
       if (parts) {
         const total = prev.memberships.total + parts.started - parts.canceled - parts.lateCancels;
