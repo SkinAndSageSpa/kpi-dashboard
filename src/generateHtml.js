@@ -3,15 +3,20 @@
  * Large-chart, minimal-text KPI dashboard. Light, soft, feminine.
  */
 
-// Sales: trend vs prior month's full sales (±3% band = amber).
-// Retention: trend vs prior month in pp (±2pp band = amber).
-// Utilization: absolute booked % thresholds (green ≥60%, amber 50-59%, red <50%).
+// Owner/location cards (bands set by Morgan 2026-10-27):
+// Sales: trend vs prior month's full sales (±1% band = amber).
+// Retention: trend vs prior month in pp (±1pp band = amber).
+// Memberships: active count vs prior month's paid count (±1% band = amber).
+// Utilization: absolute booked % thresholds (green ≥55%, amber 45-54%, red <45%).
+// Manager pages keep the defaults below (±3%, ±2pp) when not on bonus-goal colors.
+const OWNER_PCT_BAND = 0.01;
+const OWNER_PP_BAND  = 1;
 
-function trendHealthSales(projected, priorFull) {
-  if (projected === null || priorFull === null || priorFull === 0) return 'neutral';
+function trendHealthSales(projected, priorFull, band = 0.03) {
+  if (projected == null || priorFull == null || priorFull === 0) return 'neutral';
   const ratio = (projected - priorFull) / priorFull;
-  if (ratio >  0.03) return 'green';
-  if (ratio < -0.03) return 'red';
+  if (ratio >  band) return 'green';
+  if (ratio < -band) return 'red';
   return 'amber';
 }
 
@@ -26,8 +31,8 @@ function trendHealthPp(current, prior, threshold = 2) {
 // Utilization: absolute booked % thresholds, not trend vs prior month.
 function utilizationHealth(current) {
   if (current === null || current === undefined) return 'neutral';
-  if (current >= 60) return 'green';
-  if (current >= 50) return 'amber';
+  if (current >= 55) return 'green';
+  if (current >= 45) return 'amber';
   return 'red';
 }
 
@@ -360,7 +365,7 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
   const [cur, m1] = periods;
   const pLabels = periods.map(p => p?.label);
 
-  const sh = trendHealthSales(cur?.projectedSales, m1?.sales);
+  const sh = trendHealthSales(cur?.projectedSales, m1?.sales, OWNER_PCT_BAND);
   const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
     ? cur.projectedSales - cur.sales
     : null;
@@ -388,7 +393,7 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  const rh = trendHealthPp(cur?.retention, m1?.retention);
+  const rh = trendHealthPp(cur?.retention, m1?.retention, OWNER_PP_BAND);
   const retCard = kpiCard({
     label: 'Retention',
     health: rh,
@@ -398,18 +403,21 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  // No health color (yet): the current month is now an estimate (last month's paid
-  // + started − cancelled), and falls back to billed-so-far if that fetch fails.
+  // Only colored when the current month came from the full formula (parts set) —
+  // the billed-so-far fallback would read as a drop for most of the month.
+  const mh = cur?.memberships?.parts
+    ? trendHealthSales(cur.memberships.total, m1?.memberships?.total, OWNER_PCT_BAND)
+    : 'neutral';
   const memCard = periods.some(p => p?.memberships) ? kpiCard({
     label: 'Memberships',
-    health: 'neutral',
+    health: mh,
     currentDisplay: cur?.memberships ? String(cur.memberships.total) : '—',
-    chart: membershipChart(periods, 'neutral'),
+    chart: membershipChart(periods, mh),
     projRow: '',
     mtd: true,
   }) : '';
 
-  const signals = [sh, uh, rh].filter(h => h !== 'neutral');
+  const signals = [sh, uh, rh, mh].filter(h => h !== 'neutral');
   const overall = signals.includes('red') ? 'red'
     : signals.includes('amber') ? 'amber'
     : signals.length > 0 ? 'green' : 'neutral';
@@ -443,7 +451,7 @@ function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
   const [cur, m1, m2] = loc.periods;
   const pLabels = [cur?.label, m1?.label, m2?.label];
 
-  const sh = trendHealthSales(cur?.projectedSales, m1?.sales);
+  const sh = trendHealthSales(cur?.projectedSales, m1?.sales, OWNER_PCT_BAND);
   const projectedTop = (cur?.projectedSales && cur?.sales && cur.projectedSales > cur.sales)
     ? cur.projectedSales - cur.sales : null;
   const salesCard = kpiCard({
@@ -459,7 +467,7 @@ function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
     chart: utilizationChart([cur, m1, m2], uh), mtd: true,
   });
 
-  const rh = trendHealthPp(cur?.retention, m1?.retention);
+  const rh = trendHealthPp(cur?.retention, m1?.retention, OWNER_PP_BAND);
   const retCard = kpiCard({
     label: 'Retention', health: rh, currentDisplay: fmtPct(cur?.retention),
     chart: retentionChart([cur, m1, m2], rh),
@@ -854,7 +862,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Retention colors = trend vs prior month: green ↑ · amber ≈ · red ↓ &nbsp;·&nbsp; Utilization colors = booked %: green ≥60% · amber 50–59% · red &lt;50%
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45%
 </footer>
 
 <script>
