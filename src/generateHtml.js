@@ -36,6 +36,15 @@ function utilizationHealth(current) {
   return 'red';
 }
 
+// Panel pill (Morgan 2026-10-27): Needs Love = 2+ red cards, Watch = anything not
+// green with at most 1 red, Thriving = all green. Uncolored (neutral) cards are skipped.
+function overallHealth(cardHealths) {
+  const signals = cardHealths.filter(h => h !== 'neutral');
+  if (!signals.length) return 'neutral';
+  if (signals.filter(h => h === 'red').length >= 2) return 'red';
+  return signals.every(h => h === 'green') ? 'green' : 'amber';
+}
+
 function fmt$(n) {
   if (n === null || n === undefined) return '—';
   return '$' + Math.round(n).toLocaleString('en-US');
@@ -417,10 +426,7 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   }) : '';
 
-  const signals = [sh, uh, rh, mh].filter(h => h !== 'neutral');
-  const overall = signals.includes('red') ? 'red'
-    : signals.includes('amber') ? 'amber'
-    : signals.length > 0 ? 'green' : 'neutral';
+  const overall = overallHealth([sh, uh, rh, mh]);
 
   const pill = { green: 'Thriving', amber: 'Watch', red: 'Needs Love', neutral: 'No Data' };
 
@@ -474,9 +480,17 @@ function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  const signals = [sh, uh, rh].filter(h => h !== 'neutral');
-  const overall = signals.includes('red') ? 'red' : signals.includes('amber') ? 'amber'
-    : signals.length > 0 ? 'green' : 'neutral';
+  const mh = cur?.memberships?.parts
+    ? trendHealthSales(cur.memberships.total, m1?.memberships?.total, OWNER_PCT_BAND)
+    : 'neutral';
+  const memCard = [cur, m1, m2].some(p => p?.memberships) ? kpiCard({
+    label: 'Memberships', health: mh,
+    currentDisplay: cur?.memberships ? String(cur.memberships.total) : '—',
+    chart: membershipChart([cur, m1, m2], mh),
+    mtd: true,
+  }) : '';
+
+  const overall = overallHealth([sh, uh, rh, mh]);
   const pill = { green: 'Thriving', amber: 'Watch', red: 'Needs Love', neutral: 'No Data' };
 
   return `
@@ -489,6 +503,7 @@ function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
         ${salesCard}
         ${utilCard}
         ${retCard}
+        ${memCard}
       </div>
     </div>`;
 }
@@ -862,7 +877,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45%
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red · Needs Love = 2+ red
 </footer>
 
 <script>
