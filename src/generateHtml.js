@@ -413,9 +413,9 @@ function businessPanel(biz, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  // Only colored when the current month came from the full formula (parts set) —
+  // Only colored when the current month is the live active count (live set) —
   // the billed-so-far fallback would read as a drop for most of the month.
-  const mh = cur?.memberships?.parts
+  const mh = cur?.memberships?.live
     ? trendHealthSales(cur.memberships.total, m1?.memberships?.total, OWNER_PCT_BAND)
     : 'neutral';
   const memCard = periods.some(p => p?.memberships) ? kpiCard({
@@ -481,7 +481,7 @@ function locationPanel(loc, errorText = OWNER_ERROR_TEXT) {
     mtd: true,
   });
 
-  const mh = cur?.memberships?.parts
+  const mh = cur?.memberships?.live
     ? trendHealthSales(cur.memberships.total, m1?.memberships?.total, OWNER_PCT_BAND)
     : 'neutral';
   const memCard = [cur, m1, m2].some(p => p?.memberships) ? kpiCard({
@@ -878,7 +878,7 @@ ${panels}
 ${locationsSection(locations)}
 
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = last month&rsquo;s paid + started &minus; cancelled, incl. late-month cancels; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = memberships Active today in Apps &rarr; Memberships, paused/scheduled not counted; internal plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green
 </footer>
 
 <script>
