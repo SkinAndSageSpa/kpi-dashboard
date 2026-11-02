@@ -981,8 +981,9 @@ function parseMemberships(text) {
   return { total: total - internal, new: newCount - internalNew, byName, excludesInternal: true };
 }
 
-// Staff-perk plans like "Spa Leader Benefit (internal)" aren't client memberships.
-const INTERNAL_PLAN = /\(internal\)/i;
+// Not client memberships: staff-perk plans like "Spa Leader Benefit (internal)" and
+// room-rent plans like "Rent | Queen Anne Treatment Room" (Morgan 2026-11-02).
+const INTERNAL_PLAN = /\(internal\)|^\s*rent\s*\|/i;
 
 /**
  * Live membership counts from Apps → Memberships (/client-memberships). That page
