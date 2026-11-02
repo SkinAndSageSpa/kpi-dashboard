@@ -1067,10 +1067,14 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
   }
   const { series, head, prior, tag } = viewSeries(data.periods || [], view);
   const labels = series.map(p => p?.label);
+  // Owner colors compare this month vs last month, like the owner dashboard, even
+  // on the quarterly view (headline/bars stay quarterly; bonus banner stays QTD vs last quarter).
+  const cH = owner ? (data.periods?.[0] || {}) : head;
+  const cP = owner ? (data.periods?.[1] || {}) : prior;
   const val = k => series.map(p => p?.[k] ?? null);
 
   const rh = goalColors ? goalHealth('retention', head.retention, prior.retention)
-    : trendHealthPp(head.retention ?? null, prior.retention ?? null, owner ? OWNER_PP_BAND : 2);
+    : trendHealthPp(cH.retention ?? null, cP.retention ?? null, owner ? OWNER_PP_BAND : 2);
   const retCard = kpiCard({
     label: 'Client Retention', health: rh, tag,
     currentDisplay: head.retention === null || head.retention === undefined ? '—' : Math.round(head.retention) + '%',
@@ -1081,7 +1085,7 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
   });
 
   const ph = goalColors ? goalHealth('productPerSale', head.productPerSale, prior.productPerSale)
-    : trendHealthSales(head.productPerSale ?? null, prior.productPerSale ?? null, owner ? OWNER_PCT_BAND : 0.03);
+    : trendHealthSales(cH.productPerSale ?? null, cP.productPerSale ?? null, owner ? OWNER_PCT_BAND : 0.03);
   const ppsCard = kpiCard({
     label: 'Product Sales / Service', health: ph, tag,
     currentDisplay: head.productPerSale === null || head.productPerSale === undefined ? '—' : dollars2(head.productPerSale),
@@ -1090,7 +1094,7 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
 
   // Lower supply cost is better: green when it drops by more than 1pp.
   const sh = goalColors ? goalHealth('supplyPct', head.supplyPct, prior.supplyPct)
-    : trendHealthPp(prior.supplyPct ?? null, head.supplyPct ?? null, owner ? OWNER_PP_BAND : 1);
+    : trendHealthPp(cP.supplyPct ?? null, cH.supplyPct ?? null, owner ? OWNER_PP_BAND : 1);
   const supplyCard = supply ? kpiCard({
     label: 'Supply Costs (% of sales)', health: sh, tag,
     currentDisplay: head.supplyPct === null || head.supplyPct === undefined ? '—' : head.supplyPct.toFixed(1) + '%',
@@ -1098,7 +1102,7 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
   }) : '';
 
   const hh = goalColors ? goalHealth('availableHours', head.availableHours, prior.availableHours)
-    : trendHealthSales(head.availableHours ?? null, prior.availableHours ?? null, owner ? OWNER_PCT_BAND : 0.03);
+    : trendHealthSales(cH.availableHours ?? null, cP.availableHours ?? null, owner ? OWNER_PCT_BAND : 0.03);
   const hoursCard = kpiCard({
     label: 'Bookable Hours', health: hh, tag,
     currentDisplay: head.availableHours === null || head.availableHours === undefined ? '—' : Math.round(head.availableHours).toLocaleString('en-US') + 'h',
@@ -1240,7 +1244,7 @@ ${payouts.length ? `<div class="payouts">${payouts.join('\n')}</div>` : ''}
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
   Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; ${colors === 'owner'
-    ? `Colors = trend vs prior ${period}: green &gt;+1% · amber ±1% · red &lt;−1% (retention & supply costs: ±1pt; lower supply cost = better) &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green`
+    ? `Colors = this month vs last month: green &gt;+1% · amber ±1% · red &lt;−1% (retention & supply costs: ±1pt; lower supply cost = better) &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green`
     : colors === 'goal'
     ? `Colors = bonus goal vs last ${period}: green met · red missed · grey no data (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
     : `Colors = trend vs prior ${period}: green better · amber ≈ · red worse (lower supply cost = better)`}
