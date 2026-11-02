@@ -399,8 +399,11 @@ function parseStaffAvailBooked(text) {
 // month), inflating Avail and understating Booked %. Work around it by recomputing
 // the aggregate ourselves from the per-staff rows, excluding anyone with < 1 booked
 // hour rather than trusting Mangomint's own "All Selected" total.
-function aggregateUtilization(rows) {
-  const active = rows.filter(r => r.booked >= 1);
+// keepNames (current month MTD): decide who counts from the full month instead —
+// a short MTD window (e.g. Nov 1-2) can have real staff with 0 booked hours yet,
+// which used to exclude everyone at a small location and blank its utilization.
+function aggregateUtilization(rows, keepNames = null) {
+  const active = keepNames ? rows.filter(r => keepNames.has(r.name)) : rows.filter(r => r.booked >= 1);
   const excluded = rows.length - active.length;
   if (excluded > 0) {
     console.log(`  [Utilization] excluding ${excluded} staff with <1 booked hr (Mangomint archived-staff bug)`);
@@ -583,7 +586,7 @@ async function fetchSales(page, base, monthOption, snapPrefix, location = null, 
 // timePeriodStart from that broken frame — so the "MTD" fetch was really still
 // just today→tomorrow, a single day, not the 1st-of-month→today range it
 // claimed to be. Now takes both bounds explicitly so callers control the window.
-async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null) {
+async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationIds = null, staffIds = null, keepNames = null) {
   const frame = page.frames().find(
     f => f.url().includes('/reports/business-intelligence/appointments') && f.url().includes('/html')
   );
@@ -615,9 +618,10 @@ async function fetchUtilizationWindow(page, startStr, endExclusiveStr, locationI
     const text = await p.evaluate(() => document.body?.innerText || '');
     const rows = parseStaffAvailBooked(text);
     if (!rows) { console.warn('  [Util window] Staff rows not found'); return null; }
-    const agg = aggregateUtilization(rows);
+    const agg = aggregateUtilization(rows, keepNames);
     console.log(`  [Util window] Avail=${agg.availableHours}, %=${agg.utilization}`);
-    return agg.utilization === null ? null : agg;
+    // Staff with ≥1 booked hr in this window (names stay in memory, never logged).
+    return { ...agg, bookedNames: new Set(rows.filter(r => r.booked >= 1).map(r => r.name)) };
   } finally {
     await p.close();
   }
@@ -688,20 +692,22 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
 
   if (isCurrent) {
     const { monthStart, mtdEnd, fullMonthEnd } = currentMonthWindows();
-    const [fullMonth, mtd] = await Promise.all([
-      fetchUtilizationWindow(page, monthStart, fullMonthEnd, locationIds, staffIds).catch(e => {
-        console.warn('  [Util window] full-month error:', e.message);
-        return null;
-      }),
-      fetchUtilizationWindow(page, monthStart, mtdEnd, locationIds, staffIds).catch(e => {
-        console.warn('  [Util window] MTD error:', e.message);
-        return null;
-      }),
-    ]);
-    if (mtd !== null) {
+    // Full month first: who has ≥1 booked hr anywhere this month (incl. future
+    // bookings) decides who counts in the MTD window too.
+    const fullMonth = await fetchUtilizationWindow(page, monthStart, fullMonthEnd, locationIds, staffIds).catch(e => {
+      console.warn('  [Util window] full-month error:', e.message);
+      return null;
+    });
+    const mtd = await fetchUtilizationWindow(page, monthStart, mtdEnd, locationIds, staffIds, fullMonth?.bookedNames ?? null).catch(e => {
+      console.warn('  [Util window] MTD error:', e.message);
+      return null;
+    });
+    if (mtd?.utilization != null || fullMonth?.utilization != null) {
       // % booked stays MTD, but Avail hrs shows the full month's scheduled
       // availability (incl. future days), not just hours available through today.
-      return { utilization: mtd.utilization, availableHours: fullMonth?.availableHours ?? ((locationIds || staffIds) ? null : frameAvail) };
+      // MTD % is null only when no counted staff had hours yet this month — still
+      // show the month's avail hrs rather than blanking the whole card.
+      return { utilization: mtd?.utilization ?? null, availableHours: fullMonth?.availableHours ?? ((locationIds || staffIds) ? null : frameAvail) };
     }
   }
 
@@ -715,7 +721,7 @@ async function fetchUtilization(page, base, monthOption, snapPrefix, isCurrent =
       console.warn('  [Util window] completed-month error:', e.message);
       return null;
     });
-    if (windowed) {
+    if (windowed?.utilization != null) {
       return { utilization: windowed.utilization, availableHours: windowed.availableHours };
     }
   }
