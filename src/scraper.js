@@ -235,7 +235,11 @@ async function dismissOverlays(page) {
   const dialog = page.locator('[class*="Dialog"][class*="componentCt"]').first();
   if (await dialog.isVisible({ timeout: 1000 }).catch(() => false)) {
     const text = await dialog.innerText().catch(() => '(unreadable)');
-    console.warn(`  [Dialog] blocking modal detected: ${JSON.stringify(text.slice(0, 500))}`);
+    // Only the first line (the dialog's title) — notification panels list client
+    // names and this repo's logs are public.
+    const lines = text.split(/\r?\n/);
+    const title = lines.map(l => l.trim()).find(Boolean) || '';
+    console.warn(`  [Dialog] blocking modal detected: ${JSON.stringify(title.slice(0, 60))} (${lines.length} lines)`);
 
     const closeBtn = dialog.locator(
       'button[aria-label="Close" i], [class*="close" i], button:has-text("Got it"), button:has-text("Dismiss"), button:has-text("OK"), button:has-text("Skip"), button:has-text("Close")'
@@ -975,89 +979,62 @@ function parseMemberships(text) {
 const INTERNAL_PLAN = /\(internal\)/i;
 
 /**
- * Memberships Started / Memberships Cancellations → one row per membership,
- * tab-separated, no Total row (probe7, 2026-10-25):
- *   Start Date | Client | Phone | Email | Membership Plan | Membership Status | Staff Member
- *   Started    | Client | Phone | Email | Membership Plan | Canceled On
- * An empty period renders just the "Period: …" line with no table. These rows
- * carry client contact details and this repo's logs are public, so only dates
- * and plan names are read out of them — never log or cache anything else.
+ * Live membership counts from Apps → Memberships (/client-memberships). That page
+ * loads its list from POST /api/v1/client-memberships, 200 per page as you scroll:
+ *   { byId: { <id>: { name, status, locationId, cancelAt, resumeAt, client{…}, … } },
+ *     idList, page, noMoreData, listMetadata: { clientMembershipsCount } }
+ * (probe8, 2026-11-02). The current month's figure is today's count of status
+ * "Active" — paused (no billing), scheduled (not started yet) and internal staff
+ * plans don't count. Completed months stay on Membership Payments (billed that month).
+ * Records carry client names and this repo's logs are public: only status, plan
+ * name and locationId are kept, and only counts are logged.
  */
-async function fetchMembershipRows(page, reportUrl, win, startCol, locationIds = null) {
-  const url = new URL(reportUrl);
-  const settings = JSON.parse(url.searchParams.get('settings') || '{}');
-  settings.timePeriodStart        = win.start;
-  settings.timePeriodEndExclusive = win.endExclusive;
-  applyLocationIds(settings, locationIds, `Memberships ${startCol}`);
-  url.searchParams.set('settings', JSON.stringify(settings));
-
-  const p = await page.context().newPage();
+async function fetchLiveMemberships(page, base) {
+  const byId = new Map();
+  let expected = null, done = false;
+  const onResponse = async res => {
+    if (!res.url().includes('/api/v1/client-memberships') || res.request().method() !== 'POST') return;
+    try {
+      const body = await res.json();
+      for (const [id, m] of Object.entries(body.byId || {})) {
+        byId.set(id, { status: String(m.status || ''), plan: String(m.name || ''), locationId: m.locationId ?? null });
+      }
+      if (body.listMetadata?.clientMembershipsCount != null) expected = body.listMetadata.clientMembershipsCount;
+      if (body.noMoreData) done = true;
+    } catch {}
+  };
+  page.on('response', onResponse);
   try {
-    await p.goto(url.toString(), { waitUntil: 'domcontentloaded' });
-    await p.waitForTimeout(3000);
-    const lines = (await p.evaluate(() => document.body?.innerText || '')).split('\n');
-    if (!lines.some(l => l.startsWith('Period:'))) throw new Error('report did not load (no Period line)');
-    const head = lines.findIndex(l => l.startsWith(`${startCol}\t`));
-    if (head < 0) return [];
-    const cols = parseRow(lines[head]);
-    const iStart = cols.indexOf(startCol), iPlan = cols.indexOf('Membership Plan'), iCancel = cols.indexOf('Canceled On');
-    if (iPlan < 0) throw new Error(`no Membership Plan column (columns: ${cols.join(' | ')})`);
-    return lines.slice(head + 1)
-      .map(parseRow)
-      .filter(c => c.length >= cols.length && c[iStart])
-      .filter(c => !INTERNAL_PLAN.test(c[iPlan]))
-      .map(c => ({ started: c[iStart], canceled: iCancel >= 0 ? c[iCancel] : null }));
+    // Via clicks — direct internal URLs can leave the React app spinning.
+    await page.goto(base, { waitUntil: 'domcontentloaded' });
+    await settle(page, 4000);
+    await dismissOverlays(page);
+    await page.locator('a, button, div, span').filter({ hasText: /^Apps$/ }).first().click();
+    await settle(page, 3000);
+    await page.getByText('Memberships', { exact: true }).first().click();
+    await settle(page, 5000);
+    for (let i = 0; i < 30 && !done && !(expected != null && byId.size >= expected); i++) {
+      await page.mouse.move(720, 500);
+      await page.mouse.wheel(0, 4000);
+      await page.waitForTimeout(800);
+    }
+    await settle(page, 1500);
   } finally {
-    await p.close();
+    page.off('response', onResponse);
   }
+  if (!byId.size) throw new Error('no /api/v1/client-memberships data captured');
+  if (expected != null && byId.size < expected) {
+    throw new Error(`only ${byId.size} of ${expected} memberships loaded`);
+  }
+  return [...byId.values()].filter(m => !INTERNAL_PLAN.test(m.plan));
 }
 
-// "Tue, Sep 8" / "Oct 3, 2025" / "10/3/2026" / "2026-10-03" (optionally with a
-// leading weekday or trailing time) → { y, m (1-12), d }. Mangomint drops the year
-// for dates in the current year (seen 2026-10-25: "Tue, Sep 8"), so a yearless date
-// is this year unless that would put it in the future. Dates aren't client data,
-// so an unparseable one is safe to show in the error.
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-function parseReportDate(s) {
-  let m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return { y: +m[1], m: +m[2], d: +m[3] };
-  m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
-  if (m) return { y: m[3].length === 2 ? 2000 + +m[3] : +m[3], m: +m[1], d: +m[2] };
-  m = s.match(/([A-Za-z]{3})[a-z]*\.? (\d{1,2})(?:,? (\d{4}))?/);
-  if (m && MONTHS.includes(m[1].toLowerCase())) {
-    const mon = MONTHS.indexOf(m[1].toLowerCase()) + 1, d = +m[2];
-    if (m[3]) return { y: +m[3], m: mon, d };
-    const now = ptNow();
-    const future = mon > now.getMonth() + 1 || (mon === now.getMonth() + 1 && d > now.getDate());
-    return { y: now.getFullYear() - (future ? 1 : 0), m: mon, d };
-  }
-  throw new Error(`unrecognized report date "${s}"`);
-}
-
-/**
- * Current-month active memberships. Membership Payments MTD only counts members
- * billed so far, so instead:
- *   last month's paid + started MTD − cancelled MTD − last month's late cancels
- * A late cancel is a last-month cancellation that came after that month's payment
- * (so it's in last month's paid count but won't renew): started that same month,
- * or cancelled on/after its monthly billing day (the start day-of-month, capped at
- * the month's length). Internal plans are excluded throughout.
- */
-async function currentMembershipParts(page, startedUrl, canceledUrl, locationIds = null) {
-  const mtd  = salesMTDWindow();
-  const prev = completedMonthWindow(1);
-  const [py, pm] = prev.start.split('-').map(Number);
-  const prevDays = new Date(py, pm, 0).getDate();
-
-  const started  = await fetchMembershipRows(page, startedUrl,  mtd,  'Start Date', locationIds);
-  const canceled = await fetchMembershipRows(page, canceledUrl, mtd,  'Started',    locationIds);
-  const prevCanc = await fetchMembershipRows(page, canceledUrl, prev, 'Started',    locationIds);
-  const lateCancels = prevCanc.filter(r => {
-    const s = parseReportDate(r.started), c = parseReportDate(r.canceled);
-    if (s.y === py && s.m === pm) return true;
-    return c.d >= Math.min(s.d, prevDays);
-  }).length;
-  return { started: started.length, canceled: canceled.length, lateCancels, prevCanceled: prevCanc.length };
+function countLiveMemberships(records, locationIds = null) {
+  const scoped = locationIds ? records.filter(m => locationIds.includes(m.locationId)) : records;
+  const statusCounts = {};
+  for (const m of scoped) statusCounts[m.status] = (statusCounts[m.status] || 0) + 1;
+  const active = scoped.filter(m => /^active$/i.test(m.status)).length;
+  return { active, statusCounts };
 }
 
 // New browser context logged into an account's Mangomint via its cookie secret.
@@ -1208,24 +1185,26 @@ async function scrapeAccount(browser, account, cache) {
     results.push({ label: p.label, monthsAgo: p.monthsAgo, isCurrent: p.isCurrent, ...periodData });
   }
 
-  // Current month runs first in the loop above, before last month's paid count is
-  // known, so its active-memberships figure is filled in here. On failure it keeps
-  // the billed-so-far count.
-  const cur  = results.find(r => r.isCurrent);
-  const prev = results.find(r => r.monthsAgo === 1);
-  if (metrics.includes('mem') && cur?.memberships && prev?.memberships?.total != null) {
+  // Current month = memberships Active right now (Apps → Memberships), not the
+  // billed-so-far count, so it moves only when a membership actually starts, ends
+  // or pauses — including across the month boundary. On failure it keeps the
+  // billed-so-far count (shown neutral).
+  const cur = results.find(r => r.isCurrent);
+  if (metrics.includes('mem') && cur?.memberships) {
     try {
-      const parts = await withRetry(async () => currentMembershipParts(page,
-        await generateReportUrl(page, base, 'Memberships Started', '/api/v1/reports/memberships-started', false),
-        await generateReportUrl(page, base, 'Memberships Cancellations', '/api/v1/reports/membership-cancellations', false), locationIds),
-        'Membership changes');
-      if (parts) {
-        const total = prev.memberships.total + parts.started - parts.canceled - parts.lateCancels;
-        console.log(`  [Memberships] current active = ${prev.memberships.total} paid last month + ${parts.started} started − ${parts.canceled} cancelled − ${parts.lateCancels} late cancels (of ${parts.prevCanceled}) = ${total} (billed so far: ${cur.memberships.total})`);
-        cur.memberships = { ...cur.memberships, billedSoFar: cur.memberships.total, total, new: parts.started, parts: { prevPaid: prev.memberships.total, ...parts } };
+      const records = await withRetry(() => fetchLiveMemberships(page, base), 'Live memberships');
+      if (records) {
+        const live = countLiveMemberships(records, locationIds);
+        if (!locationIds) {
+          const perLoc = {};
+          for (const m of records) if (/^active$/i.test(m.status)) perLoc[m.locationId] = (perLoc[m.locationId] || 0) + 1;
+          console.log(`  [Memberships] active by locationId: ${JSON.stringify(perLoc)}`);
+        }
+        console.log(`  [Memberships] live: ${live.active} active ${JSON.stringify(live.statusCounts)} (billed so far this month: ${cur.memberships.total})`);
+        cur.memberships = { ...cur.memberships, billedSoFar: cur.memberships.total, total: live.active, live: live.statusCounts };
       }
     } catch (e) {
-      console.warn(`  [Memberships] current-month formula failed, keeping billed-so-far count: ${e.message}`);
+      console.warn(`  [Memberships] live count failed, keeping billed-so-far count: ${e.message}`);
     }
   }
 
