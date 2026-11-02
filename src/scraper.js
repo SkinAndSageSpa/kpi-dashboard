@@ -1403,6 +1403,7 @@ async function main() {
       ],
       note: 'Each column counts only that role’s providers, at both locations · Quarterly goals: last quarter, then each month this quarter · headline = quarter to date',
       bonusPerGoal: 125, // one bonus per column (Esti team, LMT team): up to $500/quarter each
+      colors: 'owner',   // card colors + panel label mirror the owner dashboard (Morgan 2026-11-02); bonus banner still uses goal rules
       notices: roleNotices,
     },
     {
