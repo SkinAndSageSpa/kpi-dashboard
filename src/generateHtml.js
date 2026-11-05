@@ -532,6 +532,27 @@ ${columns.map(c => c.render()).join('\n')}
 </div>`;
 }
 
+// Owner dashboard: full-width row of overdue Asana counts per assignee
+// (all assignees, incl. Unassigned). Any count > 0 is red (Morgan 2026-11-05).
+function overdueSection(overdue) {
+  if (!overdue) return '';
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const total = overdue.connected ? overdue.total : null;
+  const body = !overdue.connected
+    ? '<div class="overdue-empty">Asana not connected</div>'
+    : overdue.byAssignee.length === 0
+      ? '<div class="overdue-empty ok">No overdue tasks</div>'
+      : overdue.byAssignee.map(a => `
+    <div class="overdue-chip red"><span class="overdue-name">${esc(a.name)}</span><span class="overdue-count">${a.count}</span></div>`).join('');
+  const totalCls = total == null ? 'neutral' : total > 0 ? 'red' : 'green';
+  return `
+<div class="section-divider"><h2>Overdue Asana Tasks</h2></div>
+<div class="biz-panel overdue-panel">
+  <div class="overdue-total ${totalCls}"><span class="overdue-total-num">${total == null ? '—' : total}</span><span class="overdue-total-label">overdue now</span></div>
+  <div class="overdue-chips">${body}</div>
+</div>`;
+}
+
 const STYLES = `*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -638,6 +659,22 @@ header h1 {
   height: 1px;
   background: var(--border);
 }
+
+.overdue-panel { display: flex; align-items: center; gap: 18px; padding: 14px 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.overdue-total { display: flex; flex-direction: column; align-items: center; min-width: 84px; padding-right: 18px; border-right: 1px solid var(--border); }
+.overdue-total-num { font-family: var(--serif); font-size: 30px; line-height: 1; }
+.overdue-total.red .overdue-total-num { color: var(--rose); }
+.overdue-total.green .overdue-total-num { color: var(--green); }
+.overdue-total.neutral .overdue-total-num { color: var(--muted); }
+.overdue-total-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 4px; }
+.overdue-chips { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; }
+.overdue-chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 6px 5px 12px; border-radius: 999px; background: var(--faint); max-width: 100%; }
+.overdue-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overdue-count { min-width: 22px; padding: 1px 7px; border-radius: 999px; text-align: center; font-weight: 600; }
+.overdue-chip.red .overdue-count { background: var(--rose-bg); color: var(--rose); }
+.overdue-empty { color: var(--muted); }
+.overdue-empty.ok { color: var(--green); }
+@media (max-width: 600px) { .overdue-total { border-right: none; padding-right: 0; } }
 
 .locations-grid {
   display: grid;
@@ -858,7 +895,7 @@ const TEAM_STYLES = `
 }
 `;
 
-function generateHtml({ businesses, locations = [], generatedAt, errors, notices = [] }) {
+function generateHtml({ businesses, locations = [], generatedAt, errors, notices = [], overdue = null }) {
   const panels = businesses.map(businessPanel).join('\n');
 
   const errorBanner = errors.length > 0
@@ -895,8 +932,10 @@ ${panels}
 
 ${locationsSection(locations)}
 
+${overdueSection(overdue)}
+
 <footer>
-  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = memberships Active today in Apps &rarr; Memberships, paused/scheduled not counted; internal and room-rent plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green
+  Sales = adjusted total &nbsp;·&nbsp; Utilization = booked ÷ available hrs (MTD) &nbsp;·&nbsp; Retention = retained within 180 days &nbsp;·&nbsp; Memberships = active (membership payments that month; current month = memberships Active today in Apps &rarr; Memberships, paused/scheduled not counted; internal and room-rent plans excluded), dot = new memberships &nbsp;·&nbsp; Sales/Memberships colors = trend vs prior month: green &gt;+1% · amber ±1% · red &lt;−1% &nbsp;·&nbsp; Retention colors = green &gt;+1pt · amber ±1pt · red &lt;−1pt &nbsp;·&nbsp; Utilization colors = booked %: green ≥55% · amber 45–54% · red &lt;45% &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green &nbsp;·&nbsp; Overdue Asana Tasks = incomplete tasks past their due date as of this update, all projects, by assignee
 </footer>
 
 <script>
