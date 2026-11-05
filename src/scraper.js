@@ -1299,6 +1299,19 @@ const ASANA_MANAGERS = {
   waxon: '1214890900365763', // Andrea Brown (manager@waxonpnw.com)
 };
 
+// Role titles shown on the owner dashboard instead of Asana names (Morgan
+// 2026-11-05). Keyed by Asana user gid; anyone not listed shows their Asana name.
+const ASANA_DISPLAY_NAMES = {
+  '1214890900365763': 'WAXON Manager',              // Andrea Brown
+  '1211841527818964': 'S&S Services Director',      // Sofie LaCarrubba
+  '1214912621580962': 'Assistant',                  // assistant
+  '1211841527818966': 'S&S Assistant Director',     // S&S Spa Ops
+  '1218879197777839': 'S&S Esti Manager',           // estimanager@skinandsagespa.com
+  '1218876147953833': 'S&S Esti Manager',           // estimanager@gmail.com (older account)
+  '1219906784043893': 'S&S LMT Manager',            // Kels Merrick / lmtmanager@
+  '1204874177180316': 'Business Director',          // Morgan Robart
+};
+
 async function asanaGet(token, pathAndQuery) {
   const res = await fetch(`https://app.asana.com/api/1.0${pathAndQuery}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
@@ -1341,16 +1354,19 @@ async function fetchOverdueAsana() {
     const today = await asanaSearchAll(token, workspace, { due_on: todayPT });
     const isOverdue = t => !t.completed && (t.due_at ? new Date(t.due_at) < now : (t.due_on ? t.due_on < todayPT : false));
     const tasks = [...new Map([...past, ...today].map(t => [t.gid, t])).values()].filter(isOverdue);
-    const groups = new Map();
+    const perGid = new Map();   // manager cards: exact account
+    const groups = new Map();   // owner section: by display name (merges accounts sharing a title)
     for (const t of tasks) {
       const gid = t.assignee?.gid || null;
-      const g = groups.get(gid) || { gid, name: t.assignee?.name || 'Unassigned', count: 0 };
+      perGid.set(gid, (perGid.get(gid) || 0) + 1);
+      const name = gid ? (ASANA_DISPLAY_NAMES[gid] || t.assignee?.name || 'Unknown') : 'Unassigned';
+      const g = groups.get(name) || { name, count: 0 };
       g.count++;
-      groups.set(gid, g);
+      groups.set(name, g);
     }
     const byAssignee = [...groups.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
     const managers = Object.fromEntries(Object.entries(ASANA_MANAGERS)
-      .map(([k, gid]) => [k, { count: groups.get(gid)?.count || 0 }]));
+      .map(([k, gid]) => [k, { count: perGid.get(gid) || 0 }]));
     const mgrCounts = Object.fromEntries(Object.entries(managers).map(([k, v]) => [k, v.count]));
     console.log(`[Asana] ${tasks.length} overdue across ${byAssignee.length} assignee group(s); managers ${JSON.stringify(mgrCounts)}`);
     return { connected: true, total: tasks.length, byAssignee, managers };
