@@ -1286,6 +1286,62 @@ async function prepareStaffGroups(browser, account, cache) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+// ── Asana overdue tasks (manager pages) ───────────────────────────────────────
+// Single current-state number per panel: incomplete tasks assigned to that
+// panel's manager whose due date/time has passed (Morgan 2026-11-05). Counts
+// only — task names never touch logs (public repo).
+const ASANA_MANAGERS = {
+  esti:  ['1218879197777839'], // estimanager@skinandsagespa.com
+  lmt:   ['1219906784043893'], // Kels Merrick (lmtmanager@skinandsagespa.com)
+  waxon: ['1214890900365763'], // Andrea Brown (manager@waxonpnw.com)
+};
+
+async function asanaGet(token, pathAndQuery) {
+  const res = await fetch(`https://app.asana.com/api/1.0${pathAndQuery}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Asana ${res.status} on ${pathAndQuery.split('?')[0]}`);
+  return res.json();
+}
+
+async function fetchOverdueAsana() {
+  const token = process.env.ASANA_ACCESS_TOKEN;
+  const none = Object.fromEntries(Object.keys(ASANA_MANAGERS).map(k => [k, { count: null }]));
+  if (!token) { console.warn('[Asana] ASANA_ACCESS_TOKEN not set — overdue counts shown as —'); return none; }
+  try {
+    const me = await asanaGet(token, '/users/me?opt_fields=workspaces');
+    const workspace = me.data?.workspaces?.[0]?.gid;
+    if (!workspace) throw new Error('no workspace on token');
+    const now = new Date();
+    const todayPT = now.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }); // YYYY-MM-DD
+    const isOverdue = t => t.due_at ? new Date(t.due_at) < now : (t.due_on ? t.due_on < todayPT : false);
+    const out = {};
+    for (const [key, gids] of Object.entries(ASANA_MANAGERS)) {
+      const seen = new Set();
+      let count = 0;
+      for (const gid of gids) {
+        let offset = null;
+        do {
+          const q = `/tasks?assignee=${gid}&workspace=${workspace}&completed_since=now&opt_fields=completed,due_on,due_at&limit=100${offset ? `&offset=${offset}` : ''}`;
+          const page = await asanaGet(token, q);
+          for (const t of page.data || []) {
+            if (t.completed || seen.has(t.gid)) continue;
+            seen.add(t.gid);
+            if (isOverdue(t)) count++;
+          }
+          offset = page.next_page?.offset || null;
+        } while (offset);
+      }
+      out[key] = { count };
+      console.log(`[Asana] ${key}: ${count} overdue`);
+    }
+    return out;
+  } catch (err) {
+    console.error(`[Asana] ${err.message}`);
+    return none;
+  }
+}
+
 async function main() {
   console.log('KPI Dashboard scraper starting...');
   console.log(`Screenshots → ${SCREENSHOT_DIR}`);
@@ -1374,6 +1430,7 @@ async function main() {
   } catch (err) {
     console.error(`[Supply] ${err.message}`);
   }
+  const overdue = await fetchOverdueAsana();
   const withSupply = (data, col) => data && data.periods
     ? { ...data, periods: data.periods.map(p => ({ ...p, supplyPct: supply[col][p.label] ?? null })) }
     : data;
@@ -1405,8 +1462,8 @@ async function main() {
       columns: 2,
       view: 'quarterly',
       panels: [
-        { data: withSupply(missing('skinsage_esti', 'Estheticians'), 'esti'),      supply: true },
-        { data: withSupply(missing('skinsage_lmt',  'Massage Therapists'), 'lmt'), supply: true },
+        { data: withSupply(missing('skinsage_esti', 'Estheticians'), 'esti'),      supply: true, overdue: overdue.esti },
+        { data: withSupply(missing('skinsage_lmt',  'Massage Therapists'), 'lmt'), supply: true, overdue: overdue.lmt },
       ],
       note: 'Each column counts only that role’s providers, at both locations · Quarterly goals: last quarter, then each month this quarter · headline = quarter to date',
       bonusPerGoal: 125, // one bonus per column (Esti team, LMT team): up to $500/quarter each
@@ -1419,7 +1476,7 @@ async function main() {
       columns: 1,
       view: 'monthly',
       panels: [
-        { data: withSupply(missing('waxon', 'WAXON'), 'waxon'), supply: true },
+        { data: withSupply(missing('waxon', 'WAXON'), 'waxon'), supply: true, overdue: overdue.waxon },
       ],
       note: 'Monthly goals · Belltown and Capitol Hill combined · headline = month to date',
       bonusPerGoal: 125, // studio manager: up to $500/mo, $125 per goal met vs prior month
