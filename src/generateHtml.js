@@ -660,7 +660,7 @@ header h1 {
   background: var(--border);
 }
 
-.overdue-panel { display: flex; align-items: center; gap: 18px; padding: 14px 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.biz-panel.overdue-panel { flex-direction: row; flex-shrink: 0; overflow: visible; display: flex; align-items: center; gap: 18px; padding: 14px 16px; margin-bottom: 14px; flex-wrap: wrap; }
 .overdue-total { display: flex; flex-direction: column; align-items: center; min-width: 84px; padding-right: 18px; border-right: 1px solid var(--border); }
 .overdue-total-num { font-family: var(--serif); font-size: 30px; line-height: 1; }
 .overdue-total.red .overdue-total-num { color: var(--rose); }
@@ -676,6 +676,11 @@ header h1 {
 .overdue-empty.ok { color: var(--green); }
 @media (max-width: 600px) { .overdue-total { border-right: none; padding-right: 0; } }
 
+.kpi-chart.overdue-big { align-items: center; min-height: 90px; padding: 6px 0; }
+.overdue-big-num { font-family: var(--serif); font-size: 64px; line-height: 1; font-weight: 300; }
+.overdue-card.red .overdue-big-num { color: var(--rose); }
+.overdue-card.green .overdue-big-num { color: var(--green); }
+.overdue-card.neutral .overdue-big-num { color: var(--muted); }
 .locations-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1184,8 +1189,9 @@ function managerPanel({ data, supply = false, overdue = null }, view, colors = '
     <div class="kpi-card overdue-card ${oc == null ? 'neutral' : oc > 0 ? 'red' : 'green'}">
       <div class="kpi-card-top">
         <span class="kpi-label">Overdue Asana Tasks</span>
-        <span class="kpi-value">${oc == null ? '—' : oc}<span class="mtd-tag">now</span></span>
+        <span class="mtd-tag">now</span>
       </div>
+      <div class="kpi-chart overdue-big"><span class="overdue-big-num">${oc == null ? '—' : oc}</span></div>
       <div class="proj-row">${oc == null ? 'Asana not connected' : 'Incomplete tasks assigned to this team’s manager, past due'}</div>
     </div>` : '';
 
