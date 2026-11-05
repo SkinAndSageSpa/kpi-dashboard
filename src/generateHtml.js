@@ -1074,7 +1074,7 @@ function goalHealth(k, cur, prior) {
 //         'owner' = same bands + panel label as the owner dashboard (±1% / ±1pp amber,
 //                   Needs Love = 2+ red or no green) — Skin & Sage page, Morgan 2026-11-02
 //         'trend' = older default bands (±3% / ±2pp)
-function managerPanel({ data, supply = false }, view, colors = 'trend') {
+function managerPanel({ data, supply = false, overdue = null }, view, colors = 'trend') {
   const goalColors = colors === 'goal', owner = colors === 'owner';
   if (!data || data.error) {
     return `
@@ -1137,6 +1137,19 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
     chart: bigChart(val('availableHours'), labels, hh, v => Math.round(v) + 'h', null, CHART_SLOTS),
   });
 
+  // Overdue Asana tasks for this panel's manager: current state only, no chart;
+  // 0 = green, anything over 0 = red (Morgan 2026-11-05). Not part of the health
+  // pill or the bonus.
+  const oc = overdue?.count;
+  const overdueCard = overdue ? `
+    <div class="kpi-card overdue-card ${oc == null ? 'neutral' : oc > 0 ? 'red' : 'green'}">
+      <div class="kpi-card-top">
+        <span class="kpi-label">Overdue Asana Tasks</span>
+        <span class="kpi-value">${oc == null ? '—' : oc}<span class="mtd-tag">now</span></span>
+      </div>
+      <div class="proj-row">${oc == null ? 'Asana not connected' : 'Incomplete tasks assigned to this team’s manager, past due'}</div>
+    </div>` : '';
+
   const cardHealths = [rh, ph, supply ? sh : 'neutral', hh];
   const signals = cardHealths.filter(h => h !== 'neutral');
   const overall = owner ? overallHealth(cardHealths)
@@ -1155,6 +1168,7 @@ function managerPanel({ data, supply = false }, view, colors = 'trend') {
         ${ppsCard}
         ${supplyCard}
         ${hoursCard}
+        ${overdueCard}
       </div>
     </div>`;
 }
@@ -1271,7 +1285,7 @@ ${payouts.length ? `<div class="payouts">${payouts.join('\n')}</div>` : ''}
 
 <footer>
   ${note ? `<div class="team-note">${note}</div>` : ''}
-  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; ${colors === 'owner'
+  Client Retention = clients from a rolling 60-day window retained within 180 days${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Product Sales / Service = Mangomint’s “Avg Product Total Per Sale”${view === 'quarterly' ? ' (quarter = average of its months)' : ''} &nbsp;·&nbsp; Supply Costs = % of sales, from the accountant’s sheet &nbsp;·&nbsp; Bookable Hours = available hours per month, incl. scheduled${view === 'quarterly' ? ' (quarter = monthly average)' : ''} &nbsp;·&nbsp; Overdue Asana Tasks = incomplete tasks assigned to the manager with a past due date, as of this update (red if any; not part of the label or bonus) &nbsp;·&nbsp; ${colors === 'owner'
     ? `Colors = this month vs last month${view === 'quarterly' ? ' (▲▼ next to the quarter-to-date number = same bands vs last quarter)' : ''}: green &gt;+1% · amber ±1% · red &lt;−1% (retention & supply costs: ±1pt; lower supply cost = better) &nbsp;·&nbsp; Panel label: Thriving = all green · Watch = not all green, ≤1 red, ≥1 green · Needs Love = 2+ red or no green`
     : colors === 'goal'
     ? `Colors = bonus goal vs last ${period}: green met · red missed · grey no data (retention & product/service: increase · supply costs: reduction · bookable hours: maintain or increase)`
