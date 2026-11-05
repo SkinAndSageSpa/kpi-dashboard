@@ -1307,7 +1307,6 @@ const ASANA_DISPLAY_NAMES = {
   '1214912621580962': 'Assistant',                  // assistant
   '1211841527818966': 'S&S Assistant Director',     // S&S Spa Ops
   '1218879197777839': 'S&S Esti Manager',           // estimanager@skinandsagespa.com
-  '1218876147953833': 'S&S Esti Manager',           // estimanager@gmail.com (older account)
   '1219906784043893': 'S&S LMT Manager',            // Kels Merrick / lmtmanager@
   '1204874177180316': 'Business Director',          // Morgan Robart
 };
