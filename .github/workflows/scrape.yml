@@ -27,6 +27,8 @@ jobs:
       # Owner dashboard password (src/lockPage.js). Unset → owner page is replaced
       # by a "not configured" page rather than published unencrypted.
       DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+      # Manager pages: overdue Asana task count per manager. Unset → card shows —.
+      ASANA_ACCESS_TOKEN: ${{ secrets.ASANA_ACCESS_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
